@@ -1,9 +1,10 @@
-name: Build and publish ETF dashboard
+name: Publish ETF dashboard
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "30 8 * * 1-5"
+  push:
+    branches:
+      - main
 
 permissions:
   contents: read
@@ -29,16 +30,8 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Restore data cache
-        uses: actions/cache@v4
-        with:
-          path: data_cache
-          key: etf-data-cache-${{ github.run_id }}
-          restore-keys: |
-            etf-data-cache-
-
-      - name: Generate dashboard
-        run: python etf_dashboard.py --source auto
+      - name: Validate committed dashboard
+        run: python -m py_compile etf_dashboard.py
 
       - name: Configure Pages
         uses: actions/configure-pages@v5
