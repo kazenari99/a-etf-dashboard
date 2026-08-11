@@ -5,6 +5,8 @@ on:
   push:
     branches:
       - main
+  schedule:
+    - cron: "30 8 * * 1-5"
 
 permissions:
   contents: read
@@ -30,8 +32,16 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Validate committed dashboard
-        run: python -m py_compile etf_dashboard.py
+      - name: Restore data cache
+        uses: actions/cache@v4
+        with:
+          path: data_cache
+          key: etf-data-cache-${{ github.run_id }}
+          restore-keys: |
+            etf-data-cache-
+
+      - name: Generate dashboard
+        run: python etf_dashboard.py --source baostock
 
       - name: Configure Pages
         uses: actions/configure-pages@v5

@@ -945,6 +945,51 @@ def collect_eastmoney_data():
     return rows, errors
 
 
+def collect_baostock_data():
+    errors = []
+    rows = []
+    for group, items in ETF_GROUPS.items():
+        for code, fallback_name in items:
+            try:
+                klines = baostock_daily_kline(code, bars=90)
+                if klines:
+                    save_kline_rows(code, "baostock", klines)
+                else:
+                    klines = cache_entry_rows(load_kline_cache().get(code))
+                    if klines:
+                        errors.append(f"{code} {fallback_name}: BaoStock为空，已使用缓存")
+                    else:
+                        errors.append(f"{code} {fallback_name}: BaoStock K线为空")
+            except Exception as exc:
+                klines = cache_entry_rows(load_kline_cache().get(code))
+                if klines:
+                    errors.append(f"{code} {fallback_name}: BaoStock失败，已使用缓存：{exc}")
+                else:
+                    klines = []
+                    errors.append(f"{code} {fallback_name}: BaoStock K线失败：{exc}")
+
+            latest = klines[-1] if klines else {}
+            row = {
+                "group": group,
+                "code": code,
+                "name": fallback_name,
+                "price": latest.get("close"),
+                "pct": latest_pct_from_klines(klines),
+                "turnover": latest.get("amount"),
+                "main_flow_yi": None,
+                "main_flow_pct": None,
+                "r5": pct_return(klines, 5),
+                "r20": pct_return(klines, 20),
+                "r60": pct_return(klines, 60),
+                "pos60": moving_position(klines, 60),
+                "last_kline_date": latest.get("date", "-") if latest else "-",
+            }
+            row["state"] = classify(row)
+            row["score"] = score(row)
+            rows.append(row)
+    return rows, errors
+
+
 def collect_tushare_data(token):
     errors = []
     rows = []
@@ -1028,6 +1073,10 @@ def collect_tushare_data(token):
 
 
 def collect_dashboard_data(source, token):
+    if source == "baostock":
+        rows, errors = collect_baostock_data()
+        return rows, errors, "BaoStock ETF日K + 交易所ETF份额", "资金流使用交易所ETF份额变化 × ETF价格"
+
     if source == "eastmoney":
         rows, errors = collect_eastmoney_data()
         return rows, errors, "东方财富行情/K线 + 交易所ETF份额", "资金流使用交易所ETF份额变化 × ETF价格"
@@ -1668,7 +1717,7 @@ def main():
     parser = argparse.ArgumentParser(description="生成A股ETF资金观察网页")
     parser.add_argument("--serve", action="store_true", help="生成后启动本地网页服务")
     parser.add_argument("--port", type=int, default=8765, help="本地网页端口，默认8765")
-    parser.add_argument("--source", choices=["auto", "tushare", "eastmoney"], default="auto", help="数据源，默认auto优先Tushare")
+    parser.add_argument("--source", choices=["auto", "tushare", "eastmoney", "baostock"], default="auto", help="数据源，默认auto使用东方财富与多源兜底")
     parser.add_argument("--token", default="", help="Tushare token，也可以放到环境变量TUSHARE_TOKEN或config/tushare_token.txt")
     args = parser.parse_args()
 

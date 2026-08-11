@@ -60,14 +60,14 @@ TUSHARE_TOKEN=你的token python3 etf_dashboard.py
 
 ## 发布到 GitHub Pages
 
-仓库包含 `.github/workflows/pages.yml`，推送到 GitHub 后可以用 GitHub Pages 发布静态网页。
+仓库包含 `.github/workflows/pages.yml`，推送到 GitHub 后可以用 GitHub Pages 发布静态网页，并在工作日自动刷新。
 
 推荐设置：
 
 1. 在 GitHub 新建一个空仓库，例如 `a-etf-dashboard`。
 2. 把本地仓库推送到这个 GitHub 仓库。
 3. 在仓库 `Settings → Pages` 里选择 `GitHub Actions`。
-4. 手动运行一次 `Build and publish ETF dashboard` workflow，之后它会在工作日自动刷新。
+4. 手动运行一次 `Publish ETF dashboard` workflow，之后它会在工作日自动刷新。
 
 发布后的页面一般是：
 
@@ -75,7 +75,7 @@ TUSHARE_TOKEN=你的token python3 etf_dashboard.py
 https://你的GitHub用户名.github.io/仓库名/reports/etf_dashboard.html
 ```
 
-线上版是静态网页，页面里的“刷新数据”按钮只在本地服务下可用；GitHub Pages 版本由 GitHub Actions 自动刷新。
+线上版是静态网页，页面里的“刷新数据”按钮只在本地服务下可用；GitHub Pages 版本由 GitHub Actions 在工作日 UTC 08:30 自动刷新，对应北京时间 16:30 / 日本时间 17:30。
 
 ## 数据口径
 
