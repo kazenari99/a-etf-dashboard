@@ -1,0 +1,5 @@
+把你的 Tushare token 放到同目录的 tushare_token.txt
+
+示例：
+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
