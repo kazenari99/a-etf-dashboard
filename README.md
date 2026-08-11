@@ -75,7 +75,7 @@ TUSHARE_TOKEN=你的token python3 etf_dashboard.py
 https://你的GitHub用户名.github.io/仓库名/reports/etf_dashboard.html
 ```
 
-线上版是静态网页，页面里的“刷新数据”按钮只在本地服务下可用；GitHub Pages 版本由 GitHub Actions 在工作日 UTC 08:30 自动刷新，对应北京时间 16:30 / 日本时间 17:30。
+线上版是静态网页，页面里的“刷新数据”按钮只在本地服务下可用；GitHub Pages 版本由 GitHub Actions 在工作日 UTC 11:00 自动刷新，对应北京时间 19:00 / 日本时间 20:00。
 
 ## 数据口径
 
