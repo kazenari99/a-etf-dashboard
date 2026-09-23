@@ -39,6 +39,6 @@ python -m http.server 8766 --bind 127.0.0.1
 
 GitHub Actions工作日北京时间19:00计划执行，实际调度可能延迟。推送main、手动运行也会抓取更新。仓库Secret名为`HITHINK_API_KEY`；密钥只在抓取步骤注入，不出现在网页、JSON、代码、日志或缓存中。不要在前端调用带key的API。
 
-首页：[JADE PULSE](https://kazenari99.github.io/a-etf-dashboard/)。根路径直接显示仪表盘；旧路径 `/a-etf-dashboard/reports/etf_dashboard.html` 保留相同内容，兼容已有书签。Pages只上传首页、报告HTML和JSON。每次联网运行按时间归档；Actions研究归档保留90天。本地归档路径`archive/YYYY-MM-DD/HHMMSS/`。源不可用且无足够缓存时发布失败，保留线上上一版。
+首页：[JADE PULSE](https://kazenari99.github.io/a-etf-dashboard/)。Pages只上传根路径首页，不再发布旧的 `/reports/etf_dashboard.html` 路径。每次联网运行按时间归档；Actions研究归档保留90天。本地归档路径`archive/YYYY-MM-DD/HHMMSS/`。源不可用且无足够缓存时发布失败，保留线上上一版。
 
 原`etf_dashboard.py`及旧缓存保留用于历史参考与ETF名单，已不再作为生产任务入口。A股快照与原美股/OpenD项目互不覆盖。

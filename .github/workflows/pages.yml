@@ -42,9 +42,7 @@ jobs:
           retention-days: 90
       - name: Stage public assets only
         run: |
-          mkdir -p public/reports
           cp index.html public/
-          cp reports/etf_dashboard.html reports/etf_data.json public/reports/
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
