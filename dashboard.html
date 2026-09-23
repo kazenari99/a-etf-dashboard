@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="A股 ETF 20/60/120 日动量扫描，采用与美股快照一致的评分模型" />
+  <title>A股 ETF 动量雷达</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23090f1c'/%3E%3Cpath d='M6 23l6-7 5 3 9-11' fill='none' stroke='%236ee7b7' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'/%3E%3Ccircle cx='26' cy='8' r='2.5' fill='%23fbbf24'/%3E%3C/svg%3E" />
+  <style>__STYLE__</style>
+</head>
+<body>
+  <div class="page-shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></div>
+        <div>
+          <p class="eyebrow">HERMES / A-SHARE RESEARCH</p>
+          <h1>A股 ETF 动量雷达</h1>
+        </div>
+      </div>
+      <div class="asof"><span class="live-dot"></span><span id="asOf">载入数据中</span></div>
+    </header>
+
+    <main>
+      <div class="data-quality" id="dataQuality" role="status"></div>
+      <section class="control-row" aria-label="筛选工具">
+        <label class="search-box">
+          <span aria-hidden="true">⌕</span>
+          <input id="searchInput" type="search" placeholder="搜索代码或名称，如 515880、通信…" autocomplete="off" />
+        </label>
+        <label class="select-wrap">
+          <span>资产组</span>
+          <select id="groupSelect"><option value="all">全部资产组</option></select>
+        </label>
+        <div class="segmented" id="setupFilter" aria-label="交易状态筛选">
+          <button type="button" data-setup="all" class="active">全部</button>
+          <button type="button" data-setup="actionable">可交易</button>
+          <button type="button" data-setup="watch">等待确认</button>
+          <button type="button" data-setup="avoid">趋势破坏</button>
+        </div>
+      </section>
+
+      <section class="kpi-grid" id="kpiGrid" aria-label="市场宽度概览"></section>
+
+      <section class="market-strip">
+        <div>
+          <p class="section-kicker">REGIME</p>
+          <h2 id="regimeTitle">多周期动量观察</h2>
+          <p id="regimeCopy">正在分析市场宽度…</p>
+        </div>
+        <div class="breadth" id="breadthBars" aria-label="上涨比例"></div>
+      </section>
+
+      <section class="dashboard-grid">
+        <article class="panel scatter-panel">
+          <div class="panel-head">
+            <div><p class="section-kicker">MOMENTUM MAP</p><h2>20日 × 60日动量象限</h2></div>
+            <div class="legend"><span><i class="cool"></i>120日弱</span><span><i class="hot"></i>120日强</span></div>
+          </div>
+          <div class="chart-wrap" id="scatterChart" role="img" aria-label="ETF 20日和60日收益散点图"></div>
+          <p class="chart-note">右上角代表短中期同步上涨；圆点越大，20日平均成交额越高。点击圆点查看交易参数。</p>
+        </article>
+
+        <article class="panel leader-panel">
+          <div class="panel-head">
+            <div><p class="section-kicker">LEADERS</p><h2>综合动量排名</h2></div>
+            <span class="badge">20/60/120D</span>
+          </div>
+          <div class="leader-list" id="leaderList"></div>
+        </article>
+      </section>
+
+      <section class="opportunity-section">
+        <div class="section-title-row">
+          <div><p class="section-kicker">TRADE SETUPS</p><h2>当前动量机会</h2></div>
+          <p>回踩优先，突破确认；过热品种等待均值回归。</p>
+        </div>
+        <div class="opportunity-grid" id="opportunityGrid"></div>
+      </section>
+
+      <section class="sector-section panel">
+        <div class="panel-head"><div><p class="section-kicker">SECTOR BREADTH</p><h2>板块动量与趋势宽度</h2></div><span class="badge">样本等权 · 绿涨红跌</span></div>
+        <div class="sector-grid" id="sectorGrid"></div>
+      </section>
+      <section class="table-section">
+        <div class="section-title-row">
+          <div><p class="section-kicker">FULL UNIVERSE</p><h2>ETF 扫描明细</h2></div>
+          <p id="resultCount"></p>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr>
+              <th data-sort="ticker">代码</th><th data-sort="group">资产组</th>
+              <th data-sort="close" class="num">收盘</th><th data-sort="r20" class="num">20日</th>
+              <th data-sort="r60" class="num">60日</th><th data-sort="r120" class="num">120日</th>
+              <th data-sort="rs60" class="num">相对沪深300</th><th data-sort="atr_pct" class="num">ATR%</th>
+              <th data-sort="score" class="num">评分</th><th data-sort="setup">状态</th>
+            </tr></thead>
+            <tbody id="tableBody"></tbody>
+          </table>
+        </div>
+      </section>
+      <section class="method-panel">
+        <details><summary>评分方法与数据说明 <span>与美股 ETF 快照保持一致</span></summary>
+          <div class="method-grid"><div><h3>同一个动量框架</h3><p>20 / 60 / 120日收益在完整有效观察池中的百分位，分别乘以30% / 40% / 30%，基础分乘100。多头排列加5分，60日跑赢沪深300ETF加3分，距EMA20超过2.5倍ATR扣8分。综合分可能超过100，不是胜率。搜索和筛选不重算评分。</p></div>
+          <div><h3>同一套趋势条件</h3><p>Close &gt; EMA20 &gt; SMA50 &gt; SMA120 视为多头排列。三个周期收益均为正、多头排列且60日跑赢基准，划为动量成立；过热则等待回踩。趋势条件不满足但中长期收益与50日均线仍支持时，进入回踩观察。</p></div>
+          <div><h3>统一同花顺前复权日线</h3><p>所有行情仅从同花顺金融API获取；基准使用510300。至少121根、相同交易日窗口才参与评分，缺失保留为空。失败时仅回退同源缓存并标记。成交额取接口真实成交额20日平均；币种人民币。收盘前运行会排除未完成日线。</p></div>
+          <div><h3>观察范围与边界</h3><p>精选53只境内上市ETF，包含A股、跨境、商品和债券，非全市场。采用与美股快照一样的跨资产观察池评分；跨境产品有交易时差和溢价风险。价格区间为规则计算的观察参考，不是交易指令。工作日北京时间19:00计划更新，调度可能延迟。</p></div></div>
+        </details>
+        <details><summary id="healthSummary">数据运行记录</summary><div id="healthLog"></div></details>
+        <p class="footer-note">HERMES · A-SHARE ETF MOMENTUM RADAR · 历史表现不代表未来收益</p>
+      </section>
+    </main>
+  </div>
+
+  <aside class="detail-drawer" id="detailDrawer" role="dialog" aria-modal="true" aria-label="ETF详情" aria-hidden="true" inert>
+    <button class="drawer-close" id="drawerClose" aria-label="关闭详情">×</button>
+    <div id="drawerContent"></div>
+  </aside>
+  <div class="drawer-backdrop" id="drawerBackdrop"></div>
+  <div class="tooltip" id="tooltip" role="status"></div>
+  <script id="dataset" type="application/json">__DATA__</script><script>__SCRIPT__</script>
+</body>
+</html>

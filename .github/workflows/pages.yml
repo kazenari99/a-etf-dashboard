@@ -1,56 +1,54 @@
 name: Publish ETF dashboard
-
 on:
   workflow_dispatch:
   push:
-    branches:
-      - main
+    branches: [main]
   schedule:
     - cron: "0 11 * * 1-5"
-
 permissions:
   contents: read
   pages: write
   id-token: write
-
 concurrency:
   group: pages
   cancel-in-progress: false
-
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 35
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
-
-      - name: Install dependencies
-        run: pip install -r requirements.txt
-
-      - name: Restore data cache
-        uses: actions/cache@v4
+          python-version: '3.11'
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Test data integrity rules
+        run: python -m unittest discover -s tests -v
+      - uses: actions/cache@v4
         with:
-          path: data_cache
-          key: etf-data-cache-${{ github.run_id }}
-          restore-keys: |
-            etf-data-cache-
-
-      - name: Generate dashboard
-        run: python etf_dashboard.py --source baostock
-
-      - name: Configure Pages
-        uses: actions/configure-pages@v5
-
-      - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
+          path: data_cache/hithink_klines.json
+          key: etf-hithink-v1-${{ github.run_id }}
+          restore-keys: etf-hithink-v1-
+      - name: Generate dashboard from Tonghuashun
+        env:
+          HITHINK_API_KEY: ${{ secrets.HITHINK_API_KEY }}
+        run: python radar.py
+      - name: Archive research run
+        uses: actions/upload-artifact@v4
         with:
-          path: .
-
+          name: etf-research-${{ github.run_id }}
+          path: archive/
+          retention-days: 90
+      - name: Stage public assets only
+        run: |
+          mkdir -p public/reports
+          cp index.html public/
+          cp reports/etf_dashboard.html reports/etf_data.json public/reports/
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
   deploy:
     environment:
       name: github-pages

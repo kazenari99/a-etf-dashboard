@@ -1,108 +1,44 @@
-# A股ETF资金观察网页
+# A股 ETF 动量雷达
 
-这是一个本地 Python 小工具，用来每天生成 A股 ETF 资金与多周期强弱观察页面。
+美股 **ETF Momentum Radar** 的 A股配套版本：同款深色界面、20/60日象限、综合动量排名、板块宽度、机会卡片和详情抽屉。保留精选53只ETF观察池，没有CSV下载入口。
 
-默认使用交易所 ETF 份额变化计算资金流，历史 K 线优先使用 BaoStock 的每日涨跌幅口径，避免 ETF 折算/除权造成虚假大跌幅。
+## 数据源
 
-## 每天怎么用
+生产流程统一使用**同花顺金融API**，不使用OpenD、东方财富、BaoStock或Tushare。端点：`https://fuyao.aicubes.cn/api/fund/market/historical`，仅服务端发送 `X-api-key` 请求头。使用前复权OHLC、真实成交额，单次获取约370自然日，至少121根完整日线。请求串行且间隔0.4秒；动态限流和上游错误采用有界指数退避，认证错误立即终止。源故障仅回退同源缓存并明确标记，绝不混用其他复权批次。
 
-在当前文件夹执行：
+[同花顺官方接口文档](https://github.com/HiThink-Tech/Financial-API/blob/main/docs/api/fund/fund-market.md)和[使用约束](https://github.com/HiThink-Tech/Financial-API#使用约束)：目前不设累计调用次数上限，但有动态限流；实际权限以账户与服务端为准。
 
-```bash
-python3 etf_dashboard.py
+## 与美股版一致的模型
+
+- 20/60/120日收益在完整有效观察池内进行百分位排名，分别加权30%/40%/30%，乘100。
+- `Close > EMA20 > SMA50 > SMA120` 加5分；60日跑赢基准加3分；距EMA20超过2.5ATR扣8分。分数可超过100，不是胜率。
+- 基准从美股SPY替换为沪深300ETF（510300）。收益、均线、ATR14、过热阈值、Momentum/等待回踩/回踩观察/趋势破坏条件与美股版相同。
+- 回踩区=EMA20±0.5ATR；突破参考=前20日最高价+0.1ATR；失效参考=min(EMA20,近10日最低价)−0.5ATR。
+- 本地合成OHLCV测试通过原美股 `analysis/etf_momentum_scan.py` 生成固定对照数据，逐项验证评分、状态、均线、ATR和参考价格的数值一致性。
+- 仅日期窗口完全对齐且至少121根的ETF参与打分。排名是固定观察池内排名，筛选不改变评分。跨境、商品、债券也在观察池，遵循美股版跨资产排名逻辑，非全市场板块指数。
+- 20日平均成交额使用同花顺实际成交额，而不是close×volume近似，单位人民币元。这影响散点大小，不影响评分。
+
+## 本地运行
+
+```sh
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+# 设置环境变量 HITHINK_API_KEY，或将key保存至 config/hithink_api_key.txt（已gitignore）
+python radar.py
+python -m http.server 8766 --bind 127.0.0.1
 ```
 
-生成的网页在：
+打开 `http://127.0.0.1:8766/reports/etf_dashboard.html`。HTML内嵌全部样式、脚本和数据，可离线打开。数据JSON作为发布与归档结构保留，不在页面提供下载入口。
 
-```text
-reports/etf_dashboard.html
-```
+- `python radar.py --offline`：只使用同花顺缓存，明确标注离线；不联网。
+- `python radar.py --render`：重新计算并重绘已保存批次，保留原数据采集时间；不联网。
+- `python -m unittest discover -s tests -v`：模型一致性、日期对齐、错误与限流测试。
 
-如果想用本地网页服务访问：
+## 每日自动更新与发布
 
-```bash
-python3 etf_dashboard.py --serve
-```
+GitHub Actions工作日北京时间19:00计划执行，实际调度可能延迟。推送main、手动运行也会抓取更新。仓库Secret名为`HITHINK_API_KEY`；密钥只在抓取步骤注入，不出现在网页、JSON、代码、日志或缓存中。不要在前端调用带key的API。
 
-然后打开：
+保持原URL：`/a-etf-dashboard/reports/etf_dashboard.html`。Pages只上传首页、报告HTML和JSON。每次联网运行按时间归档；Actions研究归档保留90天。本地归档路径`archive/YYYY-MM-DD/HHMMSS/`。源不可用且无足够缓存时发布失败，保留线上上一版。
 
-```text
-http://127.0.0.1:8765/reports/etf_dashboard.html
-```
-
-## 配置 Tushare
-
-去 Tushare 个人中心获取 token 后，新建这个文件：
-
-```text
-config/tushare_token.txt
-```
-
-把 token 原样放进去即可。
-
-也可以运行时传入：
-
-```bash
-python3 etf_dashboard.py --source tushare --token 你的token
-```
-
-或者使用环境变量：
-
-```bash
-TUSHARE_TOKEN=你的token python3 etf_dashboard.py
-```
-
-## 页面怎么看
-
-- 先看“今日快速判断”：它会告诉你资金和强弱最靠前的方向。
-- 再看“板块资金与多周期强弱”：对比宽基、科技、消费、周期、金融等大类。
-- 最后看“ETF明细排序”：重点关注状态为“资金+趋势共振”和“中期强势内回调”的 ETF。
-
-## 发布到 GitHub Pages
-
-仓库包含 `.github/workflows/pages.yml`，推送到 GitHub 后可以用 GitHub Pages 发布静态网页，并在工作日自动刷新。
-
-推荐设置：
-
-1. 在 GitHub 新建一个空仓库，例如 `a-etf-dashboard`。
-2. 把本地仓库推送到这个 GitHub 仓库。
-3. 在仓库 `Settings → Pages` 里选择 `GitHub Actions`。
-4. 手动运行一次 `Publish ETF dashboard` workflow，之后它会在工作日自动刷新。
-
-发布后的页面一般是：
-
-```text
-https://你的GitHub用户名.github.io/仓库名/reports/etf_dashboard.html
-```
-
-线上版是静态网页，页面里的“刷新数据”按钮只在本地服务下可用；GitHub Pages 版本由 GitHub Actions 在工作日 UTC 11:00 自动刷新，对应北京时间 19:00 / 日本时间 20:00。
-
-## 数据口径
-
-当前默认资金流口径：
-
-- 上交所 ETF：使用上交所 ETF 份额接口，取最近两期份额变化。
-- 深交所 ETF：使用深交所 ETF 最新份额接口，第一次运行写入缓存，第二次运行后用缓存差值计算。
-- 资金流估算：`份额变化 × ETF价格`
-
-可选 Tushare Pro：
-
-- `fund_daily`：场内基金日线行情
-- `fund_share`：基金份额数据
-
-行情和强弱数据使用多源兜底：
-
-- 实时价格/今日涨跌：优先东方财富实时行情。
-- 5日、20日、60日涨跌幅：优先 BaoStock 每日涨跌幅连乘。
-- 备用历史 K 线：东方财富、AKShare、BaoStock、新浪、本地缓存。
-- 资金流：交易所 ETF 份额变化 × ETF价格。
-
-注意：Tushare 的 `fund_share` 文档里基金份额单位是“万份”，程序会用最近两次份额变化乘以收盘价，换算成亿元。部分 Tushare 基金接口需要积分权限，权限不足时页面底部会提示。
-
-## 后续可以升级
-
-- 接入真实 ETF 份额变化，计算申赎净流入。
-- 加入自选 ETF 配置文件。
-- 增加每日历史归档。
-- 增加“主线变化”趋势图。
-- 增加自动打开浏览器。
+原`etf_dashboard.py`及旧缓存保留用于历史参考与ETF名单，已不再作为生产任务入口。A股快照与原美股/OpenD项目互不覆盖。
