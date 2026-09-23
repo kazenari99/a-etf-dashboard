@@ -127,6 +127,7 @@ def publish(payload):
     template=(ROOT/'dashboard.html').read_text()
     for marker,file in (('__STYLE__','radar.css'),('__SCRIPT__','radar.js')):template=template.replace(marker,(ROOT/file).read_text())
     page=template.replace('__DATA__',encoded.replace('<','\\u003c'))
+    (ROOT/'index.html').write_text(page,encoding='utf-8')
     (out/'etf_dashboard.html').write_text(page,encoding='utf-8')
     (out/'etf_data.json').write_text(encoded,encoding='utf-8')
     return out
