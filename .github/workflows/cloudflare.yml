@@ -29,7 +29,7 @@ jobs:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       GH_REPO: ${{ github.repository }}
       CLOUDFLARE_ACCOUNT_ID: d210ce0ca782b8901889a72737771d59
-      CLOUDFLARE_PROJECT: ${{ vars.CLOUDFLARE_PROJECT || 'jade' }}
+      CLOUDFLARE_PROJECT: ${{ vars.CLOUDFLARE_PROJECT || 'jade-a' }}
     steps:
       - uses: actions/checkout@v4
         with:

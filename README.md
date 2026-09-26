@@ -4,9 +4,9 @@
 
 已添加独立的 `.github/workflows/cloudflare.yml`，复用成功的 `pages.yml` 构建产物，不重复获取行情。初次配置需要账户范围内的 Cloudflare Pages Edit API Token，存入 Repository secret `CLOUDFLARE_API_TOKEN`。
 
-手动运行 **Publish to Cloudflare**，首次设 `create_project=true`，默认项目名为 `jade`（可通过 Repository variable `CLOUDFLARE_PROJECT` 设置）。项目已经存在时会停止，避免覆盖其他网站。确认项目归属后后续发布用 `create_project=false`。实际网址以 Cloudflare 返回的域名为准。
+手动运行 **Publish to Cloudflare**，首次设 `create_project=true`，默认项目名为 `jade-a`（可通过 Repository variable `CLOUDFLARE_PROJECT` 设置）。项目已经存在时会停止，避免覆盖其他网站。确认项目归属后后续发布用 `create_project=false`。实际网址以 Cloudflare 返回的域名为准。
 
-正式网址：[JADE PULSE](https://jade-90o.pages.dev)。首次发布与线上核验已完成，Repository variable `CLOUDFLARE_ENABLED=true`，每日快照构建成功后自动发布至 Cloudflare。GitHub Pages 保留为同步镜像。定时任务或上游数据失败时保留最后成功版本，以页面数据日期为准。
+正式网址：[JADE PULSE](https://jade-a.pages.dev)。首次发布与线上核验已完成，Repository variable `CLOUDFLARE_ENABLED=true`，每日快照构建成功后自动发布至 Cloudflare。GitHub Pages 保留为同步镜像。定时任务或上游数据失败时保留最后成功版本，以页面数据日期为准。
 
 
 美股 **ETF Momentum Radar** 的 A股配套版本：同款深色界面、20/60日象限、综合动量排名、板块宽度、机会卡片和详情抽屉。保留精选53只ETF观察池，没有CSV下载入口。
@@ -48,6 +48,6 @@ python -m http.server 8766 --bind 127.0.0.1
 
 GitHub Actions工作日北京时间19:00计划执行，实际调度可能延迟。推送main、手动运行也会抓取更新。仓库Secret名为`HITHINK_API_KEY`；密钥只在抓取步骤注入，不出现在网页、JSON、代码、日志或缓存中。不要在前端调用带key的API。
 
-首页：[JADE PULSE](https://jade-90o.pages.dev/)。Pages只上传根路径首页，不再发布旧的 `/reports/etf_dashboard.html` 路径。每次联网运行按时间归档；Actions研究归档保留90天。本地归档路径`archive/YYYY-MM-DD/HHMMSS/`。源不可用且无足够缓存时发布失败，保留线上上一版。
+首页：[JADE PULSE](https://jade-a.pages.dev/)。Pages只上传根路径首页，不再发布旧的 `/reports/etf_dashboard.html` 路径。每次联网运行按时间归档；Actions研究归档保留90天。本地归档路径`archive/YYYY-MM-DD/HHMMSS/`。源不可用且无足够缓存时发布失败，保留线上上一版。
 
 原`etf_dashboard.py`及旧缓存保留用于历史参考与ETF名单，已不再作为生产任务入口。A股快照与原美股/OpenD项目互不覆盖。
