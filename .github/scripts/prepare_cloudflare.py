@@ -59,8 +59,12 @@ def main():
         except HTTPError as error:
             if error.code == 404 and method == "GET":
                 return None
-            # Never print request headers or credentials.
-            raise RuntimeError(f"Cloudflare request failed: HTTP {error.code}") from None
+            # Numeric codes help diagnose permissions without exposing credentials.
+            try:
+                codes = [item.get("code") for item in json.load(error).get("errors", [])]
+            except (ValueError, TypeError):
+                codes = []
+            raise RuntimeError(f"Cloudflare request failed: HTTP {error.code}; codes={codes}") from None
         if not result.get("success"):
             raise RuntimeError("Cloudflare rejected the project request")
         return result["result"]
@@ -88,4 +92,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

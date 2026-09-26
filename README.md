@@ -1,5 +1,14 @@
 # JADE PULSE
 
+## Cloudflare Pages 发布
+
+已添加独立的 `.github/workflows/cloudflare.yml`，复用成功的 `pages.yml` 构建产物，不重复获取行情。初次配置需要账户范围内的 Cloudflare Pages Edit API Token，存入 Repository secret `CLOUDFLARE_API_TOKEN`。
+
+手动运行 **Publish to Cloudflare**，首次设 `create_project=true`，默认项目名为 `jade`（可通过 Repository variable `CLOUDFLARE_PROJECT` 设置）。项目已经存在时会停止，避免覆盖其他网站。确认项目归属后后续发布用 `create_project=false`。实际网址以 Cloudflare 返回的域名为准。
+
+首次部署与网页核验成功后，将 Repository variable `CLOUDFLARE_ENABLED` 设为 `true`；以后每日快照构建成功会自动发布至 Cloudflare。未启用时，仅手动触发会部署。GitHub Pages 在迁移验证期间继续可用。当前 Cloudflare 首次发布尚待 Token 写入权限修正，不表示已经迁移完成。
+
+
 美股 **ETF Momentum Radar** 的 A股配套版本：同款深色界面、20/60日象限、综合动量排名、板块宽度、机会卡片和详情抽屉。保留精选53只ETF观察池，没有CSV下载入口。
 
 ## 数据源
