@@ -1,0 +1,59 @@
+name: Publish to Cloudflare
+on:
+  workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: 'Successful snapshot run ID; blank selects latest'
+        type: string
+        default: ''
+      create_project:
+        description: 'One-time project creation; refuses to overwrite an existing project'
+        type: boolean
+        default: false
+  workflow_run:
+    workflows: ["Publish ETF dashboard"]
+    types: [completed]
+    branches: [main]
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: cloudflare-production
+  cancel-in-progress: false
+jobs:
+  publish:
+    if: ${{ github.event_name == 'workflow_dispatch' || (vars.CLOUDFLARE_ENABLED == 'true' && github.event.workflow_run.conclusion == 'success') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      CLOUDFLARE_ACCOUNT_ID: d210ce0ca782b8901889a72737771d59
+      CLOUDFLARE_PROJECT: ${{ vars.CLOUDFLARE_PROJECT || 'jade' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Prepare validated snapshot and Cloudflare project
+        id: prepare
+        env:
+          SOURCE_RUN_ID: ${{ inputs.source_run_id || github.event.workflow_run.id }}
+          CREATE_PROJECT: ${{ inputs.create_project }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: python .github/scripts/prepare_cloudflare.py
+      - name: Deploy static dashboard
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ env.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy cf-public --project-name=${{ env.CLOUDFLARE_PROJECT }} --branch=main --commit-hash=${{ steps.prepare.outputs.commit_sha }}
+      - name: Verify published homepage
+        env:
+          SITE_URL: ${{ steps.prepare.outputs.site_url }}
+        run: |
+          curl --fail --silent --show-error --retry 5 --retry-all-errors --retry-delay 10 "$SITE_URL/" -o /tmp/live.html
+          python -c "from pathlib import Path; assert 'JADE PULSE' in Path('/tmp/live.html').read_text(), 'Unexpected published page'"
+
