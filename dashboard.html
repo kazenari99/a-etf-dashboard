@@ -35,8 +35,8 @@
       </section>
 
       <section class="sector-section panel">
-        <div class="panel-head"><div><p class="section-kicker">SECTOR BREADTH</p><h2>板块动量与趋势宽度</h2></div><span class="badge">全观察池 · 样本等权 · 绿涨红跌</span></div>
-        <div class="sector-grid" id="sectorGrid"></div>
+        <div class="panel-head"><div><p class="section-kicker">SECTOR BREADTH</p><h2>板块动量与趋势宽度</h2></div><span class="badge">全观察池 · ETF等权 · 绿涨红跌</span></div>
+        <p class="chart-note">股票板块、红利策略、商品与债券分别展示；ETF等权，同主题多产品可能影响组内均值，并非行业指数收益。</p><div class="sector-grid" id="sectorGrid"></div>
       </section>
       <section class="changes-section panel"><div class="panel-head"><div><p class="section-kicker">SINCE LAST SNAPSHOT</p><h2>每日变化</h2></div><span id="comparisonDate" class="badge"></span></div><div id="dailyChanges" class="changes-grid"></div></section>
       <section class="control-row" aria-label="筛选工具">
@@ -104,10 +104,10 @@
 
       <section class="method-panel">
         <details><summary>评分方法与数据说明 <span>与美股 ETF 快照保持一致</span></summary>
-          <div class="method-grid"><div><h3>同一个动量框架</h3><p>20 / 60 / 120日收益在完整有效观察池中的百分位，分别乘以30% / 40% / 30%，基础分乘100。多头排列加5分，60日跑赢沪深300ETF加3分，距EMA20超过2.5倍ATR扣8分。综合分可能超过100，不是胜率。搜索和筛选不重算评分。</p></div>
+          <div class="method-grid"><div><h3>同一个动量框架</h3><p>20 / 60 / 120日收益在完整有效观察池中的百分位，分别乘以30% / 40% / 30%，基础分乘100。多头排列加5分，60日跑赢沪深300ETF加3分，距EMA20超过2.5倍ATR扣8分。综合分可能超过100，不是胜率。搜索和筛选不重算评分。观察池扩容会改变百分位分数，扩容前后不直接比较排名。</p></div>
           <div><h3>同一套趋势条件</h3><p>Close &gt; EMA20 &gt; SMA50 &gt; SMA120 视为多头排列。三个周期收益均为正、多头排列且60日跑赢基准，划为动量成立；过热则等待回踩。趋势条件不满足但中长期收益与50日均线仍支持时，进入回踩观察。</p></div>
           <div><h3>统一同花顺前复权日线</h3><p>所有行情仅从同花顺金融API获取；基准使用510300。至少121根、相同交易日窗口才参与评分，缺失保留为空。失败时仅回退同源缓存并标记。成交额取接口真实成交额20日平均；币种人民币。收盘前运行会排除未完成日线。</p></div>
-          <div><h3>观察范围与边界</h3><p>精选53只境内上市ETF，包含A股、跨境、商品和债券，非全市场。采用与美股快照一样的跨资产观察池评分；跨境产品有交易时差和溢价风险。价格区间为规则计算的观察参考，不是交易指令。工作日北京时间19:00计划更新，调度可能延迟。</p></div></div>
+          <div><h3>观察范围与边界</h3><p>扩展精选观察池（当前数量见页面上方），涵盖境内上市ETF，包含A股、跨境、商品和债券，非全市场。采用与美股快照一样的跨资产观察池评分；跨境产品有交易时差和溢价风险。价格区间为规则计算的观察参考，不是交易指令。工作日北京时间19:00计划更新，调度可能延迟。</p></div></div>
         </details>
         <details><summary id="healthSummary">数据运行记录</summary><div id="healthLog"></div></details>
         <p class="footer-note">HERMES · A-SHARE ETF MOMENTUM RADAR · 历史表现不代表未来收益</p>

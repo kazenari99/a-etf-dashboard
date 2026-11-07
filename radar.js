@@ -145,7 +145,7 @@ function rankChange(ticker){const change=payload.comparison?.changes?.[ticker];r
 function renderChanges(){
  const c=payload.comparison;
  $('#comparisonDate').textContent=c?.asof?`对比 ${c.asof}`:'暂无对照';
- if(!c?.changes){$('#dailyChanges').innerHTML='<p class="empty-note">暂无可比的较早快照。积累真实历史后显示排名变化，不推算历史排名。</p>';return;}
+ if(!c?.changes){$('#dailyChanges').innerHTML='<p class="empty-note">暂无同口径的较早快照。观察池扩容、有效样本变化或缓存数据均暂停比较；后续使用真实历史，不推算排名。</p>';return;}
  const items=Object.entries(c.changes),names=list=>list.length?list.slice(0,5).map(([t])=>`${escapeHTML(etfName(t))} ${t}`).join('、'):'无';
  const rises=items.filter(([,v])=>v.rank_delta>0).sort((a,b)=>b[1].rank_delta-a[1].rank_delta);
  $('#dailyChanges').innerHTML=[['排名上升',rises.length?rises.slice(0,3).map(([t,v])=>`${escapeHTML(etfName(t))} ↑${v.rank_delta}`).join('、'):'无'],['新进入强势',names(items.filter(([,v])=>v.entered_strong))],['新转为趋势破坏',names(items.filter(([,v])=>v.broken))]].map(([title,text])=>`<article><span>${title}</span><p>${text}</p></article>`).join('');

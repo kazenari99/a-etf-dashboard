@@ -12,7 +12,7 @@ import urllib.parse
 import urllib.request
 import numpy as np
 import pandas as pd
-from etf_dashboard import ETF_GROUPS
+from universe import ETF_GROUPS, UNIVERSE_VERSION
 
 ROOT=Path(__file__).resolve().parent
 TZ=dt.timezone(dt.timedelta(hours=8))
@@ -122,7 +122,7 @@ def metrics(entries):
     return sorted(rows,key=lambda r:r['score'] if r['score'] is not None else -math.inf,reverse=True),latest
 
 def snapshot_baseline(payload):
-    return {key: payload.get(key) for key in ('asof', 'model', 'provider', 'benchmark')} | {
+    return {key: payload.get(key) for key in ('asof', 'model', 'provider', 'benchmark', 'universe_version')} | {
         'rows': [{key: row.get(key) for key in ('ticker', 'score', 'setup', 'eligible', 'cached')}
                  for row in payload.get('rows', [])]}
 
@@ -135,7 +135,7 @@ def attach_comparison(payload, previous):
     payload['previous_snapshot'] = snapshot_baseline(baseline) if baseline else None
     if not baseline or not baseline.get('asof') or baseline['asof'] >= payload['asof']:
         return
-    if any(baseline.get(k) != payload.get(k) for k in ('model', 'provider', 'benchmark')):
+    if any(baseline.get(k) != payload.get(k) for k in ('model', 'provider', 'benchmark', 'universe_version')):
         return
     old = {r['ticker']: r for r in baseline['rows'] if r.get('eligible')}
     new = {r['ticker']: r for r in payload['rows'] if r.get('eligible')}
@@ -192,7 +192,10 @@ def build(offline=False,render=False):
     cache=json.loads(CACHE.read_text()) if CACHE.exists() else {}
     if render:
         payload=json.loads((ROOT/'reports/etf_data.json').read_text())
+        previous=dict(payload)
         payload['rows'],payload['asof']=metrics(cache)
+        payload['universe_version']=UNIVERSE_VERSION
+        attach_comparison(payload,previous)
         publish(payload);return
     entries={};errors=[];key=None if offline else api_key()
     tasks=[c for items in ETF_GROUPS.values() for c,_ in items]
@@ -214,7 +217,7 @@ def build(offline=False,render=False):
     rows,latest=metrics(entries)
     if not any(r['eligible'] for r in rows):raise RuntimeError('无日期对齐且满121根的同花顺数据，保留已发布页面。')
     now=dt.datetime.now(TZ)
-    payload=dict(rows=rows,asof=latest,generated=now.isoformat(timespec='seconds'),errors=errors,offline=offline,provider='同花顺金融API',benchmark='510300',model='us-momentum-v1',requested_cutoff=completed_cutoff(now).isoformat())
+    payload=dict(rows=rows,asof=latest,generated=now.isoformat(timespec='seconds'),errors=errors,offline=offline,provider='同花顺金融API',benchmark='510300',model='us-momentum-v1',universe_version=UNIVERSE_VERSION,requested_cutoff=completed_cutoff(now).isoformat())
     attach_comparison(payload, published_snapshot() if not offline else None)
     out=publish(payload)
     if not offline:
