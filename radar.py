@@ -121,6 +121,62 @@ def metrics(entries):
         for r,value in zip(eligible,scores):r['score']=float(value)
     return sorted(rows,key=lambda r:r['score'] if r['score'] is not None else -math.inf,reverse=True),latest
 
+def snapshot_baseline(payload):
+    return {key: payload.get(key) for key in ('asof', 'model', 'provider', 'benchmark')} | {
+        'rows': [{key: row.get(key) for key in ('ticker', 'score', 'setup', 'eligible', 'cached')}
+                 for row in payload.get('rows', [])]}
+
+
+def attach_comparison(payload, previous):
+    """Compare published observations; never reconstruct past adjusted prices."""
+    payload['comparison'] = None
+    baseline = previous if previous and previous.get('asof', '') < payload['asof'] else (
+        previous.get('previous_snapshot') if previous and previous.get('asof') == payload['asof'] else None)
+    payload['previous_snapshot'] = snapshot_baseline(baseline) if baseline else None
+    if not baseline or not baseline.get('asof') or baseline['asof'] >= payload['asof']:
+        return
+    if any(baseline.get(k) != payload.get(k) for k in ('model', 'provider', 'benchmark')):
+        return
+    old = {r['ticker']: r for r in baseline['rows'] if r.get('eligible')}
+    new = {r['ticker']: r for r in payload['rows'] if r.get('eligible')}
+    if not old or old.keys() != new.keys() or any(r.get('cached') for r in [*old.values(), *new.values()]):
+        return
+    if any(not isinstance(r.get('score'), (int,float)) or not math.isfinite(r['score']) for r in [*old.values(), *new.values()]):
+        return
+    def ranks(rows):
+        return {t: 1 + sum(r['score'] > row['score'] for r in rows.values()) for t, row in rows.items()}
+    before, after = ranks(old), ranks(new)
+    strong = {'Momentum', 'Strong / wait pullback'}
+    payload['comparison'] = {'asof': baseline['asof'], 'changes': {
+        t: {'rank_delta': before[t] - after[t],
+            'entered_strong': new[t]['setup'] in strong and old[t]['setup'] not in strong,
+            'broken': new[t]['setup'] == 'Avoid / broken' and old[t]['setup'] != 'Avoid / broken'}
+        for t in new}}
+
+
+def published_snapshot():
+    from html.parser import HTMLParser
+    class DatasetParser(HTMLParser):
+        active = False
+        parts = None
+        def handle_starttag(self, tag, attrs):
+            if tag == 'script' and dict(attrs).get('id') == 'dataset':
+                self.active = True
+                self.parts = []
+        def handle_endtag(self, tag):
+            if tag == 'script': self.active = False
+        def handle_data(self, data):
+            if self.active: self.parts.append(data)
+    try:
+        with urllib.request.urlopen('https://kazenari99.github.io/a-etf-dashboard/', timeout=20) as response:
+            page = response.read(5_000_000).decode('utf-8')
+        parser = DatasetParser(); parser.feed(page)
+        return json.loads(''.join(parser.parts or []))
+    except Exception as exc:
+        print(f'Previous published snapshot unavailable: {type(exc).__name__}; comparison omitted')
+        return None
+
+
 def publish(payload):
     out=ROOT/'reports';out.mkdir(exist_ok=True)
     encoded=json.dumps(payload,ensure_ascii=False,allow_nan=False)
@@ -159,6 +215,7 @@ def build(offline=False,render=False):
     if not any(r['eligible'] for r in rows):raise RuntimeError('无日期对齐且满121根的同花顺数据，保留已发布页面。')
     now=dt.datetime.now(TZ)
     payload=dict(rows=rows,asof=latest,generated=now.isoformat(timespec='seconds'),errors=errors,offline=offline,provider='同花顺金融API',benchmark='510300',model='us-momentum-v1',requested_cutoff=completed_cutoff(now).isoformat())
+    attach_comparison(payload, published_snapshot() if not offline else None)
     out=publish(payload)
     if not offline:
         CACHE.parent.mkdir(exist_ok=True);tmp=CACHE.with_suffix('.tmp');tmp.write_text(json.dumps(entries,ensure_ascii=False));tmp.replace(CACHE)
