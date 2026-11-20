@@ -1,0 +1,37 @@
+name: Momentum backtest
+on:
+  workflow_dispatch:
+    inputs:
+      years:
+        description: 'History length in years (max 5 per API window)'
+        type: string
+        default: '5'
+permissions:
+  contents: read
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: python -m unittest discover -s tests -v
+      - name: Fetch history and evaluate
+        env:
+          HITHINK_API_KEY: ${{ secrets.HITHINK_API_KEY }}
+          YEARS: ${{ inputs.years }}
+        run: |
+          case "$YEARS" in [1-5]) ;; *) echo "years must be 1-5"; exit 1;; esac
+          python backtest.py --fetch --years "$YEARS"
+          cat reports/backtest.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: momentum-backtest-${{ github.run_id }}
+          path: |
+            reports/backtest.md
+            reports/backtest.json
+          retention-days: 90

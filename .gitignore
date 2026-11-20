@@ -11,3 +11,6 @@ public/
 
 config/hithink_api_key.txt
 .env
+
+data_cache/backtest_klines.json
+reports/backtest_synthetic.*

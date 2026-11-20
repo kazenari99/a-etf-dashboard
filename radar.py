@@ -5,14 +5,15 @@ import datetime as dt
 import json
 import math
 import os
+import random
 from pathlib import Path
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
-import numpy as np
 import pandas as pd
-from universe import ETF_GROUPS, UNIVERSE_VERSION
+import model
+from universe import ASSET_CLASS, CLUSTER_OF, CLUSTERS, CROSS_BORDER, ETF_GROUPS, UNIVERSE_VERSION
 
 ROOT=Path(__file__).resolve().parent
 TZ=dt.timezone(dt.timedelta(hours=8))
@@ -45,31 +46,49 @@ class APIError(RuntimeError):
 class AuthError(RuntimeError):
     """Credential rejected; abort the whole run instead of degrading to cache."""
 
-def request_history(code,key):
-    cutoff=completed_cutoff()
-    start=dt.datetime.combine(cutoff-dt.timedelta(days=370),dt.time(),TZ)
-    end=dt.datetime.combine(cutoff,dt.time(23,59,59),TZ)
-    thscode=code+('.SH' if code.startswith('5') else '.SZ')
-    params=dict(thscode=thscode,interval='1d',start=int(start.timestamp()*1000),end=int(end.timestamp()*1000))
-    req=urllib.request.Request(BASE+'/api/fund/market/historical?'+urllib.parse.urlencode(params),headers={'X-api-key':key,'User-Agent':'ETF-Momentum-Radar/1.0'})
-    for attempt in range(4):
+def thscode_of(code):
+    return code+('.SH' if code.startswith('5') else '.SZ')
+
+def api_get(path,params,key,attempts=4):
+    """GET with bounded exponential backoff + jitter; auth failures abort immediately."""
+    req=urllib.request.Request(BASE+path+'?'+urllib.parse.urlencode(params),headers={'X-api-key':key,'User-Agent':'ETF-Momentum-Radar/1.0'})
+    for attempt in range(attempts):
+        last=attempt==attempts-1
         try:
             with urllib.request.urlopen(req,timeout=25) as response:p=json.load(response)
             if p.get('code')!=0:raise APIError(p.get('code'),p.get('request_id'))
-            data=p.get('data') or {}
-            if data.get('thscode')!=thscode:raise ValueError('接口标的与请求不一致')
-            rows=normalize(data.get('item') or [],cutoff)
-            if len(rows)<121:raise ValueError(f'历史不足121根：{len(rows)}')
-            return dict(rows=rows,source='同花顺金融API',adjustment='qfq',fetched_at=dt.datetime.now(TZ).isoformat(timespec='seconds'),request_id=p.get('request_id'),cached=False)
+            return p
         except APIError as exc:
-            if exc.code not in (4001,5001,5002,5003) or attempt==3:raise
+            if exc.code not in (4001,5001,5002,5003) or last:raise
         except urllib.error.HTTPError as exc:
             if exc.code in (401,403):raise AuthError(f'同花顺认证失败 HTTP {exc.code}；请检查 HITHINK_API_KEY。') from None
-            if exc.code not in (429,500,502,503,504) or attempt==3:raise RuntimeError(f'HTTP {exc.code}') from None
+            if exc.code not in (429,500,502,503,504) or last:raise RuntimeError(f'HTTP {exc.code}') from None
+        except json.JSONDecodeError:
+            if last:raise RuntimeError('同花顺返回内容无法解析') from None
         except (urllib.error.URLError,TimeoutError):
-            if attempt==3:raise RuntimeError('同花顺连接超时或网络不可用') from None
-        time.sleep(2**attempt)
+            if last:raise RuntimeError('同花顺连接超时或网络不可用') from None
+        time.sleep(2**attempt+random.uniform(0,.5))
     raise RuntimeError('同花顺请求失败')
+
+def request_history(code,key,days=370,min_bars=121):
+    cutoff=completed_cutoff()
+    start=dt.datetime.combine(cutoff-dt.timedelta(days=days),dt.time(),TZ)
+    end=dt.datetime.combine(cutoff,dt.time(23,59,59),TZ)
+    thscode=thscode_of(code)
+    p=api_get('/api/fund/market/historical',dict(thscode=thscode,interval='1d',start=int(start.timestamp()*1000),end=int(end.timestamp()*1000)),key)
+    data=p.get('data') or {}
+    if data.get('thscode')!=thscode:raise ValueError('接口标的与请求不一致')
+    rows=normalize(data.get('item') or [],cutoff)
+    if len(rows)<min_bars:raise ValueError(f'历史不足{min_bars}根：{len(rows)}')
+    return dict(rows=rows,source='同花顺金融API',adjustment='qfq',fetched_at=dt.datetime.now(TZ).isoformat(timespec='seconds'),request_id=p.get('request_id'),cached=False)
+
+def request_nav(code,key):
+    """Latest published unit NAV (cross-border NAVs lag the close by 1-2 sessions)."""
+    p=api_get('/api/fund/performance/nav',dict(thscode=thscode_of(code),range='month',nav_type='unit'),key)
+    items=[i for i in (p.get('data') or {}).get('item') or [] if isinstance(i.get('nav_date'),(int,float)) and isinstance(i.get('unit_nav'),(int,float)) and i['unit_nav']>0]
+    if not items:raise ValueError('无净值数据')
+    item=max(items,key=lambda i:i['nav_date'])
+    return dict(date=dt.datetime.fromtimestamp(item['nav_date']/1000,TZ).date().isoformat(),unit_nav=float(item['unit_nav']))
 
 def normalize(items,cutoff):
     rows={}
@@ -86,48 +105,70 @@ def normalize(items,cutoff):
         rows[r['date']]=r
     return [rows[k] for k in sorted(rows)]
 
-def atr14(frame):
-    prev=frame['close'].shift(1)
-    tr=pd.concat([frame['high']-frame['low'],(frame['high']-prev).abs(),(frame['low']-prev).abs()],axis=1).max(axis=1)
-    return tr.rolling(14).mean()
+def premium(bars,nav):
+    """Close on the NAV date over unit NAV. qfq equals the raw close unless a distribution
+    happened after that date, which the 1-2 session NAV lag makes negligible."""
+    if not nav or not bars:return None
+    close=next((b['close'] for b in reversed(bars) if b['date']==nav.get('date')),None)
+    return close/nav['unit_nav']-1 if close else None
 
-def metrics(entries):
-    # Anchor on the benchmark: one ETF with an extra session excludes only itself.
+def _num(v):
+    v=float(v)
+    return v if math.isfinite(v) else None
+
+def analyze(entries):
+    """Rows for every universe ETF, the latest session and the market regime.
+
+    The published score is model.V1 (US-version parity). model.V2 is computed alongside as
+    an unvalidated shadow (score_v2/setup_v2) until backtest.py supports switching.
+    """
+    universe=[(group,code,name) for group,items in ETF_GROUPS.items() for code,name in items]
     benchmark=entries.get(BENCHMARK,{}).get('rows',[])
     latest=benchmark[-1]['date'] if benchmark else None
+    panel=model.build_panel(entries,BENCHMARK) if latest else None
+    if panel is not None:
+        # Production also requires the ETF's own last bar to be the benchmark's session.
+        for t,e in entries.items():
+            bars=e.get('rows') or []
+            if not bars or bars[-1]['date']!=latest:panel['eligible'].loc[latest,t]=False
+        v1=model.score_panel(panel,model.V1,ASSET_CLASS,CLUSTERS)
+        v2=model.score_panel(panel,model.V2,ASSET_CLASS,CLUSTERS)
+        reps=model.representatives(panel,v2['ranked'],CLUSTERS)
+        absolute=model.absolute_momentum(panel)
+        state=model.regime(panel,ASSET_CLASS).loc[latest]
+        regime=dict(state=state['state'],breadth60=_num(state['breadth60']),bench_r120=_num(state['bench_r120']),hurdle=float(state['hurdle']),model=model.V2.name)
+    else:
+        regime=None
     rows=[]
-    for group,items in ETF_GROUPS.items():
-        for code,name in items:
-            e=entries.get(code,{})
-            bars=e.get('rows',[])
-            r=dict(ticker=code,name=name,group=group,date=bars[-1]['date'] if bars else None,source=e.get('source','同花顺金融API'),cached=e.get('cached',False),setup='Data unavailable',eligible=False,score=None)
-            # A score compares the same 121 sessions across the whole universe.
-            if len(bars)<121 or len(benchmark)<121 or bars[-1]['date']!=latest or [b['date'] for b in bars[-121:]] != [b['date'] for b in benchmark[-121:]]:
-                rows.append(r);continue
-            f=pd.DataFrame(bars)
-            close=f['close'].astype(float);high=f['high'].astype(float);low=f['low'].astype(float)
-            last=float(close.iloc[-1]);atr=float(atr14(f).iloc[-1])
-            ema20=float(close.ewm(span=20,adjust=False).mean().iloc[-1]);sma50=float(close.rolling(50).mean().iloc[-1]);sma120=float(close.rolling(120).mean().iloc[-1])
-            for n in (20,60,120):
-                r[f'r{n}']=last/float(close.iloc[-1-n])-1
-                r[f'rs{n}']=r[f'r{n}']-(benchmark[-1]['close']/benchmark[-1-n]['close']-1)
-            distance=(last-ema20)/atr if atr else None
-            high20=float(high.iloc[-21:-1].max());low10=float(low.iloc[-10:].min());stop=min(ema20,low10)-.5*atr
-            amounts=pd.to_numeric(f['turnover'].tail(20),errors='coerce')
-            r.update(close=last,ema20=ema20,sma50=sma50,sma120=sma120,atr14=atr,atr_pct=atr/last,dist_ema_atr=distance,vol20_ann=float(close.pct_change().iloc[-20:].std()*math.sqrt(252)),from_high120=last/float(high.iloc[-120:].max())-1,high20_prev=high20,breakout_trigger=high20+.1*atr,pullback_low=ema20-.5*atr,pullback_high=ema20+.5*atr,stop_ref=stop,stop_pct=stop/last-1,adtv20=float(amounts.mean()) if amounts.notna().all() else None,trend_aligned=last>ema20>sma50>sma120,eligible=distance is not None,setup='Avoid / broken',history=[dict(date=b['date'],close=b['close']) for b in bars[-120:]])
-            strong=all(r[f'r{n}']>0 for n in (20,60,120)) and r['trend_aligned'] and r['rs60']>0
-            if strong:r['setup']='Momentum' if distance<=2.5 else 'Strong / wait pullback'
-            elif r['r60']>0 and r['r120']>0 and last>sma50:r['setup']='Pullback watch'
-            rows.append(r)
-    eligible=[r for r in rows if r['eligible']]
-    if eligible:
-        df=pd.DataFrame(eligible)
-        scores=sum(w*df[f'r{n}'].rank(pct=True) for n,w in ((20,.30),(60,.40),(120,.30)))*100
-        scores+=np.where(df['trend_aligned'],5,0)
-        scores+=np.where(df['rs60']>0,3,0)
-        scores-=np.where(df['dist_ema_atr']>2.5,8,0)
-        for r,value in zip(eligible,scores):r['score']=float(value)
-    return sorted(rows,key=lambda r:r['score'] if r['score'] is not None else -math.inf,reverse=True),latest
+    for group,code,name in universe:
+        e=entries.get(code,{})
+        bars=e.get('rows',[])
+        r=dict(ticker=code,name=name,group=group,asset_class=ASSET_CLASS.get(code,'equity'),cluster=CLUSTER_OF.get(code),date=bars[-1]['date'] if bars else None,source=e.get('source','同花顺金融API'),cached=e.get('cached',False),setup='Data unavailable',eligible=False,score=None,score_v2=None,setup_v2='Data unavailable')
+        if code in CROSS_BORDER:
+            r['premium']=premium(bars,e.get('nav'));r['nav_date']=(e.get('nav') or {}).get('date')
+        if panel is None or code not in panel['eligible'] or not panel['eligible'].at[latest,code]:
+            rows.append(r);continue
+        g=lambda k:float(panel[k].at[latest,code])
+        last,atr,ema20=g('close'),g('atr14'),g('ema20')
+        for n in (20,60,120):
+            r[f'r{n}']=g(f'r{n}')
+            r[f'rs{n}']=r[f'r{n}']-float(panel[f'r{n}'].at[latest,BENCHMARK])
+        stop=min(ema20,g('low10'))-.5*atr
+        high20=g('high20_prev')
+        amounts=pd.to_numeric(pd.Series([b.get('turnover') for b in bars[-20:]]),errors='coerce')
+        score_v2=v2['score'].at[latest,code]
+        r.update(close=last,ema20=ema20,sma50=g('sma50'),sma120=g('sma120'),atr14=atr,atr_pct=atr/last,dist_ema_atr=g('dist_ema_atr'),vol20_ann=g('vol20'),from_high120=g('from_high120'),high20_prev=high20,breakout_trigger=high20+.1*atr,pullback_low=ema20-.5*atr,pullback_high=ema20+.5*atr,stop_ref=stop,stop_pct=stop/last-1,adtv20=float(amounts.mean()) if len(amounts)==20 and amounts.notna().all() else None,trend_aligned=bool(panel['trend_aligned'].at[latest,code]),eligible=True,
+                 setup=v1['setup'].at[latest,code],score=float(v1['score'].at[latest,code]),
+                 score_v2=float(score_v2) if pd.notna(score_v2) else None,setup_v2=v2['setup'].at[latest,code],
+                 ranked_v2=bool(v2['ranked'].at[latest,code]),cluster_rep=bool(reps.at[latest,code]),abs_momentum=bool(absolute.at[latest,code]),
+                 history=[dict(date=b['date'],close=b['close']) for b in bars[-120:]])
+        rows.append(r)
+    rows.sort(key=lambda r:r['score'] if r['score'] is not None else -math.inf,reverse=True)
+    return rows,latest,regime
+
+def metrics(entries):
+    rows,latest,_=analyze(entries)
+    return rows,latest
 
 def snapshot_baseline(payload):
     return {key: payload.get(key) for key in ('asof', 'model', 'provider', 'benchmark', 'universe_version')} | {
@@ -209,7 +250,7 @@ def build(offline=False,render=False):
         if missing:raise RuntimeError(f'缓存缺少 {len(missing)} 只观察池ETF，无法离线重绘，请联网运行。')
         payload=json.loads((ROOT/'reports/etf_data.json').read_text())
         previous=dict(payload)
-        payload['rows'],payload['asof']=metrics(cache)
+        payload['rows'],payload['asof'],payload['regime']=analyze(cache)
         check_coverage(payload['rows'])
         payload['universe_version']=UNIVERSE_VERSION
         attach_comparison(payload,previous)
@@ -232,10 +273,16 @@ def build(offline=False,render=False):
             time.sleep(.4)
         entries[code]=entry
         print(f'同花顺 {i}/{len(tasks)} {code} {len(entry["rows"])} bars',flush=True)
-    rows,latest=metrics(entries)
+    if not offline:
+        for code in CROSS_BORDER:
+            try:entries[code]['nav']=request_nav(code,key)
+            except AuthError:raise
+            except Exception as exc:errors.append(f'{code} 净值：{type(exc).__name__}: {exc}；溢价不显示。')
+            time.sleep(.4)
+    rows,latest,regime=analyze(entries)
     check_coverage(rows)
     now=dt.datetime.now(TZ)
-    payload=dict(rows=rows,asof=latest,generated=now.isoformat(timespec='seconds'),errors=errors,offline=offline,provider='同花顺金融API',benchmark='510300',model='us-momentum-v1',universe_version=UNIVERSE_VERSION,requested_cutoff=completed_cutoff(now).isoformat())
+    payload=dict(rows=rows,asof=latest,generated=now.isoformat(timespec='seconds'),errors=errors,offline=offline,provider='同花顺金融API',benchmark='510300',model=model.V1.name,regime=regime,universe_version=UNIVERSE_VERSION,requested_cutoff=completed_cutoff(now).isoformat())
     attach_comparison(payload, published_snapshot() if not offline else None)
     out=publish(payload)
     if not offline:
