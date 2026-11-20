@@ -74,7 +74,7 @@ GitHub Actions工作日北京时间19:00计划执行，实际调度可能延迟�
 
 首页：[JADE PULSE](https://jade-a.pages.dev/)。Pages只上传根路径首页，不再发布旧的 `/reports/etf_dashboard.html` 路径。每次联网运行按时间归档；Actions研究归档保留90天。本地归档路径`archive/YYYY-MM-DD/HHMMSS/`。源不可用且无足够缓存时发布失败，保留线上上一版。
 
-原`etf_dashboard.py`及旧缓存保留用于历史参考与ETF名单，已不再作为生产任务入口。A股快照与原美股/OpenD项目互不覆盖。
+原脚本已移至 `legacy/etf_dashboard.py`，与旧缓存一起保留作历史参考和原53只名单，已不再作为生产任务入口。A股快照与原美股/OpenD项目互不覆盖。
 
 ## 阅读与每日对照
 

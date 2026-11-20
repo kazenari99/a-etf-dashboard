@@ -1,6 +1,6 @@
 import unittest
 from universe import ETF_GROUPS
-from etf_dashboard import ETF_GROUPS as LEGACY
+from legacy.etf_dashboard import ETF_GROUPS as LEGACY
 from radar import attach_comparison
 
 class UniverseTests(unittest.TestCase):

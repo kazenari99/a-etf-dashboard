@@ -13,6 +13,7 @@ import urllib.parse
 import urllib.request
 import pandas as pd
 import model
+import trading_calendar
 from universe import ASSET_CLASS, CLUSTER_OF, CLUSTERS, CROSS_BORDER, ETF_GROUPS, UNIVERSE_VERSION
 
 ROOT=Path(__file__).resolve().parent
@@ -35,8 +36,7 @@ def completed_cutoff(now=None):
     now=now or dt.datetime.now(TZ)
     day=now.date()
     if now.time()<dt.time(15,15):day-=dt.timedelta(days=1)
-    while day.weekday()>4:day-=dt.timedelta(days=1)
-    return day
+    return trading_calendar.previous_trading_day(day)
 
 class APIError(RuntimeError):
     def __init__(self,code,request_id=None):
@@ -282,6 +282,7 @@ def build(offline=False,render=False):
     rows,latest,regime=analyze(entries)
     check_coverage(rows)
     now=dt.datetime.now(TZ)
+    if not trading_calendar.known(now.year):errors.append(f'trading_calendar.py 未收录{now.year}年休市安排，仅按工作日判断截止日；交易所公布后请补充。')
     payload=dict(rows=rows,asof=latest,generated=now.isoformat(timespec='seconds'),errors=errors,offline=offline,provider='同花顺金融API',benchmark='510300',model=model.V1.name,regime=regime,universe_version=UNIVERSE_VERSION,requested_cutoff=completed_cutoff(now).isoformat())
     attach_comparison(payload, published_snapshot() if not offline else None)
     out=publish(payload)

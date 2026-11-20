@@ -4,8 +4,8 @@
 A-share ETF dashboard.
 
 Run:
-  python3 etf_dashboard.py
-  python3 etf_dashboard.py --serve
+  python3 legacy/etf_dashboard.py
+  python3 legacy/etf_dashboard.py --serve
 
 The script creates reports/etf_dashboard.html.
 Tushare mode uses fund_daily + fund_share to estimate ETF subscription flow:
@@ -28,7 +28,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parent.parent  # moved to legacy/; paths stay repo-relative
 REPORT_DIR = ROOT / "reports"
 HTML_PATH = REPORT_DIR / "etf_dashboard.html"
 CACHE_DIR = ROOT / "data_cache"
