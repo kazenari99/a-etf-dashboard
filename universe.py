@@ -106,3 +106,27 @@ ETF_GROUPS = {
         ('511260', '十年国债ETF'),
     ],
 }
+
+# Asset class drives the v2 split between relative ranking (equity) and absolute momentum.
+ASSET_CLASS = {code: {'商品': 'commodity', '债券': 'bond'}.get(group, 'equity')
+               for group, items in ETF_GROUPS.items() for code, _ in items}
+
+# Cross-border ETFs trade at a premium/discount to NAV; the page shows it next to momentum.
+CROSS_BORDER = [code for code, _ in ETF_GROUPS['港股/跨境']]
+
+# Overlapping exposures: pairs with daily-return correlation >= 0.95 over the 250 sessions
+# to 2026-11-20 (backtest.py section 6). Shown in the detail drawer; used by the backtest's
+# de-duplication variant. Re-check after universe changes.
+CLUSTERS = {
+    '芯片·科创·信创': ['159995', '512760', '588200', '588000', '159538'],
+    '半导体设备': ['159516', '159558'],
+    '创新药': ['515120', '159992'],
+    '电池': ['159755', '159840'],
+    '地产': ['515060', '512200'],
+    '沪深300·A500': ['510300', '159338'],
+    '中证500·1000': ['510500', '512100'],
+    '新能源·环保': ['516160', '512580'],
+    '港股互联网': ['513330', '159605'],
+    '红利': ['510880', '515080'],
+}
+CLUSTER_OF = {code: name for name, codes in CLUSTERS.items() for code in codes}

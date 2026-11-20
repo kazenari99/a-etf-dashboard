@@ -9,7 +9,12 @@ FIXTURE=json.loads((Path(__file__).parent/'fixtures/us_model_parity.json').read_
 class RadarTests(unittest.TestCase):
     def entries(self):return json.loads(json.dumps(FIXTURE['entries']))
     def test_existing_us_model_numerical_parity(self):
-        rows,_=radar.metrics(self.entries());actual={r['ticker']:r for r in rows}
+        entries=self.entries()
+        rows,latest=radar.metrics(entries);actual={r['ticker']:r for r in rows}
+        # Score/setup parity is checked on model.V1 (the US formula); production publishes PROD.
+        v1=radar.model.score_panel(radar.model.build_panel(entries,radar.BENCHMARK),radar.model.V1)
+        for r in rows:
+            if r['eligible']:r.update(score=float(v1['score'].at[latest,r['ticker']]),setup=v1['setup'].at[latest,r['ticker']])
         for expected in FIXTURE['expected']:
             result=actual[expected['ticker']]
             for key in ('score','r20','r60','r120','rs20','rs60','rs120','ema20','sma50','sma120','atr14','atr_pct','dist_ema_atr','from_high120','breakout_trigger','pullback_low','pullback_high','stop_ref','stop_pct','vol20_ann','adtv20'):
@@ -57,5 +62,40 @@ class RadarTests(unittest.TestCase):
         with patch.object(radar.urllib.request,'urlopen',return_value=Response()) as call,patch.object(radar.time,'sleep'):
             with self.assertRaises(radar.APIError):radar.request_history('510300','test-not-a-key')
         self.assertEqual(call.call_count,4)
+
+    def test_http_auth_failure_aborts_without_retry(self):
+        import urllib.error
+        error=urllib.error.HTTPError('https://example.invalid',401,'Unauthorized',{},None)
+        with patch.object(radar.urllib.request,'urlopen',side_effect=error) as call,patch.object(radar.time,'sleep'):
+            with self.assertRaises(radar.AuthError):radar.request_history('510300','test-not-a-key')
+        self.assertEqual(call.call_count,1)
+    def test_auth_error_stops_whole_build(self):
+        with patch.object(radar,'api_key',return_value='test-not-a-key'),\
+             patch.object(radar,'CACHE',Path('/nonexistent/cache.json')),\
+             patch.object(radar,'request_history',side_effect=radar.AuthError('HTTP 401')) as call,\
+             patch.object(radar,'publish') as publish:
+            with self.assertRaises(radar.AuthError):radar.build()
+        self.assertEqual(call.call_count,1)
+        publish.assert_not_called()
+    def test_extra_session_excludes_only_that_etf(self):
+        entries=self.entries();rows=entries['510050']['rows']
+        extra=dict(rows[-1],date='2099-01-01');rows.append(extra)
+        result,latest=radar.metrics(entries)
+        by={r['ticker']:r for r in result}
+        self.assertEqual(latest,entries[radar.BENCHMARK]['rows'][-1]['date'])
+        self.assertFalse(by['510050']['eligible'])
+        self.assertTrue(all(by[t]['eligible'] for t in entries if t!='510050'))
+    def test_coverage_threshold(self):
+        def rows(ok,total):return [dict(eligible=i<ok) for i in range(total)]
+        radar.check_coverage(rows(60,66))
+        for ok in (59,0):
+            with self.assertRaises(RuntimeError):radar.check_coverage(rows(ok,66))
+    def test_render_requires_cache_for_whole_universe(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            cache=Path(tmp)/'cache.json';cache.write_text(json.dumps(self.entries()))
+            with patch.object(radar,'CACHE',cache),patch.object(radar,'publish') as publish:
+                with self.assertRaises(RuntimeError):radar.build(render=True)
+            publish.assert_not_called()
 
 if __name__=='__main__':unittest.main()

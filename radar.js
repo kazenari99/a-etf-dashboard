@@ -1,19 +1,18 @@
 const state = { data: [], filtered: [], sortKey: 'score', sortDir: -1, selected: null, setup: 'all', group: 'all', query: '', watchOnly: false, favorites: [] };
 const $ = (s) => document.querySelector(s);
 const svgNS = 'http://www.w3.org/2000/svg';
-const groupNames = { Broad:'宽基', Sector:'行业板块', Industry:'细分行业', RealAsset:'实物资产', Factor:'因子', Bond:'债券', International:'国际市场' };
-const setupNames = { 'Momentum':'动量成立', 'Strong / wait pullback':'强势·等回踩', 'Pullback watch':'等待确认', 'Avoid / broken':'趋势破坏' };
+const setupNames = { 'Momentum':'动量成立', 'Strong / wait pullback':'加速强势', 'Pullback watch':'等待确认', 'Avoid / broken':'趋势破坏' };
 
 // Chinese display labels describe each fund; not official legal names.
 const payload=JSON.parse(document.getElementById('dataset').textContent);
 const etfNames=Object.fromEntries(payload.rows.map(r=>[r.ticker,r.name]));
-const etfName=ticker=>etfNames[ticker]||ticker;
+const etfName=ticker=>escapeHTML(etfNames[ticker]||ticker);
 const finite=v=>typeof v==='number'&&Number.isFinite(v);
 const pct=v=>finite(v)?`${v>=0?'+':''}${(v*100).toFixed(1)}%`:'—';
 const price=v=>finite(v)?v.toLocaleString('zh-CN',{minimumFractionDigits:3,maximumFractionDigits:3}):'—';
 const cls=v=>finite(v)?v>=0?'positive':'negative':'';
 const scoreText=v=>finite(v)?v.toFixed(1):'—';
-const statusClass=s=>s==='Momentum'?'momentum':(s.includes('wait')||s==='Pullback watch')?'wait':'avoid';
+const statusClass=s=>(s==='Momentum'||s==='Strong / wait pullback')?'momentum':s==='Pullback watch'?'wait':'avoid';
 const escapeHTML=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 setupNames['Data unavailable']='数据不足 / 日期不齐';
 let previousFocus=null;
@@ -91,7 +90,7 @@ function renderOpportunities(){
 
 function renderTable(){
   $('#resultCount').textContent=`显示 ${state.filtered.length} / ${state.data.length} 只`;
-  $('#tableBody').innerHTML=state.filtered.map(x=>`<tr data-code="${x.ticker}" tabindex="0" role="button" aria-label="查看${x.ticker}详情"><td><button class="favorite" data-favorite="${x.ticker}" aria-label="${state.favorites.includes(x.ticker)?'取消收藏':'收藏'}${x.ticker}" aria-pressed="${state.favorites.includes(x.ticker)}">${state.favorites.includes(x.ticker)?'★':'☆'}</button></td><td class="ticker-cell"><span class="ticker-code">${x.ticker}</span><span class="ticker-name">${etfName(x.ticker)}</span></td><td class="group-label">${groupNames[x.group]||x.group}</td><td class="num">¥${price(x.close)}</td><td class="num ${cls(x.r20)}">${pct(x.r20)}</td><td class="num ${cls(x.r60)}">${pct(x.r60)}</td><td class="num ${cls(x.r120)}">${pct(x.r120)}</td><td class="num ${cls(x.rs60)}">${pct(x.rs60)}</td><td class="num">${(finite(x.atr_pct)?(x.atr_pct*100).toFixed(1):'—')}%</td><td class="num score-cell">${scoreText(x.score)}</td><td class="rank-change">${rankChange(x.ticker)}</td><td><span class="table-chip ${statusClass(x.setup)}">${setupNames[x.setup]}</span></td></tr>`).join('');
+  $('#tableBody').innerHTML=state.filtered.map(x=>`<tr data-code="${x.ticker}" tabindex="0" role="button" aria-label="查看${x.ticker}详情"><td><button class="favorite" data-favorite="${x.ticker}" aria-label="${state.favorites.includes(x.ticker)?'取消收藏':'收藏'}${x.ticker}" aria-pressed="${state.favorites.includes(x.ticker)}">${state.favorites.includes(x.ticker)?'★':'☆'}</button></td><td class="ticker-cell"><span class="ticker-code">${x.ticker}</span><span class="ticker-name">${etfName(x.ticker)}${premiumChip(x)}</span></td><td class="group-label">${escapeHTML(x.group)}</td><td class="num">¥${price(x.close)}</td><td class="num ${cls(x.r20)}">${pct(x.r20)}</td><td class="num ${cls(x.r60)}">${pct(x.r60)}</td><td class="num ${cls(x.r120)}">${pct(x.r120)}</td><td class="num ${cls(x.rs60)}">${pct(x.rs60)}</td><td class="num">${(finite(x.atr_pct)?(x.atr_pct*100).toFixed(1):'—')}%</td><td class="num score-cell">${scoreText(x.score)}</td><td class="rank-change">${rankChange(x.ticker)}</td><td><span class="table-chip ${statusClass(x.setup)}">${setupNames[x.setup]}</span></td></tr>`).join('');
   document.querySelectorAll('[data-favorite]').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();const t=b.dataset.favorite;state.favorites=state.favorites.includes(t)?state.favorites.filter(v=>v!==t):[...state.favorites,t];applyFilters();}));
   if(!state.filtered.length)$('#tableBody').innerHTML='<tr><td colspan="12" class="empty-note">没有符合条件的 ETF；可重置筛选或取消「仅看自选」。</td></tr>';
   document.querySelectorAll('#tableBody tr[data-code]').forEach(el=>{const open=()=>openDrawer(state.data.find(x=>x.ticker===el.dataset.code));el.addEventListener('click',open);el.addEventListener('keydown',e=>{if(e.target===el&&e.key==='Enter')open();});});
@@ -99,7 +98,7 @@ function renderTable(){
 
 function openDrawer(x){
   if(!x)return; previousFocus=document.activeElement;state.selected=x;
-  $('#drawerContent').innerHTML=`<p class="section-kicker">ETF DETAIL</p><h2 class="detail-code">${x.ticker}</h2><p class="detail-meta">${etfName(x.ticker)}</p><p class="detail-meta">${groupNames[x.group]||x.group} · ${x.date||'无有效日期'} · ${x.cached?'同源缓存':'同花顺前复权日线'} · 收盘 ¥${price(x.close)}</p><div class="detail-score"><b>${scoreText(x.score)}</b><span>综合动量评分</span></div><div class="detail-grid">${[["20日收益",pct(x.r20),cls(x.r20)],["60日收益",pct(x.r60),cls(x.r60)],["120日收益",pct(x.r120),cls(x.r120)],["60日相对沪深300",pct(x.rs60),cls(x.rs60)],["ATR / 价格",`${(finite(x.atr_pct)?(x.atr_pct*100).toFixed(2):'—')}%`,''],["距120日高点",pct(x.from_high120),cls(x.from_high120)]].map(v=>`<div class="detail-stat"><span>${v[0]}</span><b class="${v[2]}">${v[1]}</b></div>`).join('')}</div><div class="trade-plan"><h3>${setupNames[x.setup]}</h3><div class="trade-step"><i>01</i><div>等待价格进入回踩观察区 <b>${price(x.pullback_low)}–${price(x.pullback_high)}</b>，观察是否止跌。</div></div><div class="trade-step"><i>02</i><div>趋势延续的突破触发参考为 <b>${price(x.breakout_trigger)}</b>。</div></div><div class="trade-step"><i>03</i><div>结构失效参考 <b>${price(x.stop_ref)}</b>；当前至该位置约 <b>${pct(x.stop_pct)}</b>。</div></div></div>`;
+  $('#drawerContent').innerHTML=`<p class="section-kicker">ETF DETAIL</p><h2 class="detail-code">${x.ticker}</h2><p class="detail-meta">${etfName(x.ticker)}</p><p class="detail-meta">${escapeHTML(x.group)} · ${x.date||'无有效日期'} · ${x.cached?'同源缓存':'同花顺前复权日线'} · 收盘 ¥${price(x.close)}</p><div class="detail-score"><b>${scoreText(x.score)}</b><span>综合动量评分</span></div><div class="detail-grid">${[["20日收益",pct(x.r20),cls(x.r20)],["60日收益",pct(x.r60),cls(x.r60)],["120日收益",pct(x.r120),cls(x.r120)],["60日相对沪深300",pct(x.rs60),cls(x.rs60)],["ATR / 价格",`${(finite(x.atr_pct)?(x.atr_pct*100).toFixed(2):'—')}%`,''],["距120日高点",pct(x.from_high120),cls(x.from_high120)]].map(v=>`<div class="detail-stat"><span>${v[0]}</span><b class="${v[2]}">${v[1]}</b></div>`).join('')}</div>${premiumDetail(x)}<div class="trade-plan"><h3>${setupNames[x.setup]}</h3><div class="trade-step"><i>01</i><div>${x.setup==='Strong / wait pullback'?`距EMA20超过2.5倍ATR，处于加速段；回踩区 <b>${price(x.pullback_low)}–${price(x.pullback_high)}</b> 仅作参考，2022–2026年回测中此类状态之后未见系统性回落，追高波动也更大。`:`回踩观察区 <b>${price(x.pullback_low)}–${price(x.pullback_high)}</b>，观察是否止跌。`}</div></div><div class="trade-step"><i>02</i><div>趋势延续的突破触发参考为 <b>${price(x.breakout_trigger)}</b>。</div></div><div class="trade-step"><i>03</i><div>结构失效参考 <b>${price(x.stop_ref)}</b>；当前至该位置约 <b>${pct(x.stop_pct)}</b>。</div></div></div>${exposureDetail(x)}`;
   $('#detailDrawer').inert=false;$('#detailDrawer').classList.add('open');$('#drawerBackdrop').classList.add('open');$('#detailDrawer').setAttribute('aria-hidden','false');$('#drawerClose').focus();
 }
 function closeDrawer(){ $('#detailDrawer').classList.remove('open');$('#drawerBackdrop').classList.remove('open');$('#detailDrawer').setAttribute('aria-hidden','true');$('#detailDrawer').inert=true;previousFocus?.focus(); }
@@ -114,7 +113,7 @@ function bind(){
   $('#groupSelect').addEventListener('change',e=>{state.group=e.target.value;applyFilters();});
   document.querySelectorAll('#setupFilter button').forEach(b=>b.addEventListener('click',()=>{document.querySelectorAll('#setupFilter button').forEach(x=>x.classList.remove('active'));b.classList.add('active');state.setup=b.dataset.setup;syncControls();applyFilters();}));
   document.querySelectorAll('th[data-sort]').forEach(th=>th.addEventListener('click',()=>{const key=th.dataset.sort;state.sortDir=state.sortKey===key?-state.sortDir:(['ticker','group','setup'].includes(key)?1:-1);state.sortKey=key;applyFilters();}));
-  $('#drawerClose').addEventListener('click',closeDrawer);$('#drawerBackdrop').addEventListener('click',closeDrawer);addEventListener('keydown',e=>{if(e.key==='Escape')closeDrawer();if(e.key==='Tab'&&$('#detailDrawer').classList.contains('open')){e.preventDefault();$('#drawerClose').focus();}});
+  $('#drawerClose').addEventListener('click',closeDrawer);$('#drawerBackdrop').addEventListener('click',closeDrawer);addEventListener('keydown',e=>{if(e.key==='Escape')closeDrawer();if(e.key==='Tab'&&$('#detailDrawer').classList.contains('open'))trapFocus(e);});
   let timer;addEventListener('resize',()=>{clearTimeout(timer);timer=setTimeout(renderScatter,120);});
 }
 
@@ -146,9 +145,9 @@ function renderChanges(){
  const c=payload.comparison;
  $('#comparisonDate').textContent=c?.asof?`对比 ${c.asof}`:'暂无对照';
  if(!c?.changes){$('#dailyChanges').innerHTML='<p class="empty-note">暂无同口径的较早快照。观察池扩容、有效样本变化或缓存数据均暂停比较；后续使用真实历史，不推算排名。</p>';return;}
- const items=Object.entries(c.changes),names=list=>list.length?list.slice(0,5).map(([t])=>`${escapeHTML(etfName(t))} ${t}`).join('、'):'无';
+ const items=Object.entries(c.changes),names=list=>list.length?list.slice(0,5).map(([t])=>`${etfName(t)} ${t}`).join('、'):'无';
  const rises=items.filter(([,v])=>v.rank_delta>0).sort((a,b)=>b[1].rank_delta-a[1].rank_delta);
- $('#dailyChanges').innerHTML=[['排名上升',rises.length?rises.slice(0,3).map(([t,v])=>`${escapeHTML(etfName(t))} ↑${v.rank_delta}`).join('、'):'无'],['新进入强势',names(items.filter(([,v])=>v.entered_strong))],['新转为趋势破坏',names(items.filter(([,v])=>v.broken))]].map(([title,text])=>`<article><span>${title}</span><p>${text}</p></article>`).join('');
+ $('#dailyChanges').innerHTML=[['排名上升',rises.length?rises.slice(0,3).map(([t,v])=>`${etfName(t)} ↑${v.rank_delta}`).join('、'):'无'],['新进入强势',names(items.filter(([,v])=>v.entered_strong))],['新转为趋势破坏',names(items.filter(([,v])=>v.broken))]].map(([title,text])=>`<article><span>${title}</span><p>${text}</p></article>`).join('');
 }
 function init(){
  try{
@@ -159,9 +158,42 @@ function init(){
   if(invalid||cached||payload.asof<payload.requested_cutoff)$('#dataQuality').classList.add('warning');
   $('#healthSummary').textContent=`数据运行记录 · ${payload.errors.length} 条提醒`;
   $('#healthLog').innerHTML=payload.errors.length?'<ul>'+payload.errors.map(e=>`<li>${escapeHTML(e)}</li>`).join('')+'</ul>':'<p>本次同花顺行情请求全部完成。'+(cached?'存在缓存，请查看数据时间。':'未使用缓存。')+'</p>';
-  const groups=[...new Set(state.data.map(x=>x.group))];$('#groupSelect').innerHTML+=groups.map(g=>`<option value="${g}">${g}</option>`).join('');
+  const groups=[...new Set(state.data.map(x=>x.group))];$('#groupSelect').innerHTML+=groups.map(g=>`<option value="${escapeHTML(g)}">${escapeHTML(g)}</option>`).join('');
   document.querySelectorAll('th[data-sort]').forEach(th=>{th.setAttribute('tabindex','0');th.setAttribute('role','button');th.addEventListener('keydown',e=>{if(e.key==='Enter')th.click();});});
-  restorePreferences();renderKPIs();renderChanges();bind();applyFilters();
+  restorePreferences();renderKPIs();renderRegimeState();renderChanges();bind();applyFilters();
  }catch(err){document.querySelector('main').innerHTML=`<div class="error-state"><h2>数据载入失败</h2><p>${escapeHTML(err.message)}</p></div>`;}
+}
+
+const assetNames={equity:'权益',commodity:'商品',bond:'债券'};
+const clusterMembers=Object.fromEntries([...new Set(payload.rows.map(r=>r.cluster).filter(Boolean))].map(c=>[c,payload.rows.filter(r=>r.cluster===c).map(r=>r.ticker)]));
+function premiumChip(x){
+  if(!finite(x.premium)||Math.abs(x.premium)<.01)return '';
+  return `<span class="premium-chip ${Math.abs(x.premium)>=.03?'hot':''}" title="收盘价相对${escapeHTML(x.nav_date||'')}单位净值">${x.premium>0?'溢价':'折价'} ${(Math.abs(x.premium)*100).toFixed(1)}%</span>`;
+}
+function premiumDetail(x){
+  if(!('premium' in x))return '';
+  if(!finite(x.premium))return '<p class="detail-note">跨境ETF：本次未取得净值，溢价暂不显示。</p>';
+  const warn=Math.abs(x.premium)>=.03?'溢价变化会直接影响场内收益，动量中可能含有溢价扩张成分。':'溢折价处于常见范围。';
+  return `<p class="detail-note">跨境ETF · 相对 ${escapeHTML(x.nav_date)} 单位净值 <b class="${x.premium>=.03?'negative':''}">${x.premium>0?'溢价':'折价'} ${(Math.abs(x.premium)*100).toFixed(2)}%</b>。${warn}</p>`;
+}
+function exposureDetail(x){
+  const lines=[];
+  if(x.cluster)lines.push(`同类暴露「${escapeHTML(x.cluster)}」：${clusterMembers[x.cluster].filter(t=>t!==x.ticker).map(t=>`${etfName(t)} ${t}`).join('、')}。近一年日收益相关性 ≥ 0.95，排名靠前时可能代表同一主题。`);
+  if(x.eligible&&x.asset_class!=='equity')lines.push(`${assetNames[x.asset_class]}类资产与股票ETF一起做百分位排名，排名仅表示相对强弱；绝对动量 <b>${x.abs_momentum?'成立':'不成立'}</b>（120日收益高于现金门槛且收盘在120日均线上方）。`);
+  return lines.length?`<div class="shadow-panel"><h3>暴露与资产类别</h3>${lines.map(l=>`<p>${l}</p>`).join('')}</div>`:'';
+}
+function renderRegimeState(){
+  const r=payload.regime;if(!r)return;
+  const map={risk_on:['偏进攻','sector-up'],neutral:['中性','sector-flat'],risk_off:['偏防守','sector-down']};
+  const [label,klass]=map[r.state]||['—',''];
+  $('#regimeState').innerHTML=`<span class="regime-chip ${r.state}">双动量状态 · ${label}</span><small>沪深300 120日 ${pct(r.bench_r120)} vs 现金门槛 ${pct(r.hurdle)} · 权益60日上涨占比 ${finite(r.breadth60)?Math.round(r.breadth60*100)+'%':'—'}${r.state==='risk_off'?' · 回测中偏防守阶段排名与后续收益平均为负相关，但并不稳定':''}</small>`;
+}
+function trapFocus(e){
+  const items=[...$('#detailDrawer').querySelectorAll('button,[href],[tabindex]:not([tabindex="-1"])')].filter(el=>!el.disabled);
+  if(!items.length)return;
+  const first=items[0],last=items[items.length-1];
+  if(!$('#detailDrawer').contains(document.activeElement)){e.preventDefault();first.focus();}
+  else if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus();}
+  else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus();}
 }
 init();

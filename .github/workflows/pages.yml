@@ -26,20 +26,33 @@ jobs:
       - name: Test data integrity rules
         run: python -m unittest discover -s tests -v
       - uses: actions/cache@v4
+        id: snapshot-cache
         with:
-          path: data_cache/hithink_klines.json
-          key: etf-hithink-v1-${{ github.run_id }}
-          restore-keys: etf-hithink-v1-
+          path: |
+            data_cache/hithink_klines.json
+            reports/etf_data.json
+          key: etf-snapshot-v2-${{ github.run_id }}
+          restore-keys: etf-snapshot-v2-
+      # Code pushes re-render the last fetched batch; schedule/manual runs fetch.
+      # Render falls back to a full fetch when the cache is missing or incomplete.
       - name: Generate dashboard from Tonghuashun
         env:
           HITHINK_API_KEY: ${{ secrets.HITHINK_API_KEY }}
-        run: python radar.py
+          EVENT_NAME: ${{ github.event_name }}
+          CACHE_MATCHED: ${{ steps.snapshot-cache.outputs.cache-matched-key }}
+        run: |
+          if [ "$EVENT_NAME" = "push" ] && [ -n "$CACHE_MATCHED" ] && python radar.py --render; then
+            echo "Re-rendered cached snapshot without calling the API"
+          else
+            python radar.py
+          fi
       - name: Archive research run
         uses: actions/upload-artifact@v4
         with:
           name: etf-research-${{ github.run_id }}
           path: archive/
           retention-days: 90
+          if-no-files-found: ignore
       - name: Stage public assets only
         run: |
           mkdir -p public
