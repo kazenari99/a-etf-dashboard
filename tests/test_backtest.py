@@ -41,6 +41,29 @@ class BacktestTests(unittest.TestCase):
         self.assertTrue(all(len(p['thscodes'].split(',')) <= 10 for (_, p, _), _ in call.call_args_list))
         cache.write_text.assert_called_once()
 
+    def test_batch_permission_error_falls_back_to_single(self):
+        def denied(path, params, key):
+            raise backtest.radar.APIError(2003, 'test')
+        single = dict(rows=[dict(date='2026-11-20', open=1, high=1, low=1, close=1, volume=1, turnover=1)])
+        with patch.object(backtest.radar, 'api_key', return_value='k'), \
+             patch.object(backtest.radar, 'api_get', side_effect=denied) as batch, \
+             patch.object(backtest.radar, 'request_history', return_value=single) as one, \
+             patch.object(backtest.time, 'sleep'), patch.object(backtest, 'CACHE'):
+            entries = backtest.fetch()
+        self.assertEqual(batch.call_count, 1)  # batch tried once, then abandoned
+        self.assertEqual(one.call_count, 66)
+        self.assertEqual(len(entries), 66)
+
+    def test_single_permission_error_reports_key_problem(self):
+        def denied(*args, **kwargs):
+            raise backtest.radar.APIError(2003, 'test')
+        with patch.object(backtest.radar, 'api_key', return_value='k'), \
+             patch.object(backtest.radar, 'api_get', side_effect=denied), \
+             patch.object(backtest.radar, 'request_history', side_effect=denied), \
+             patch.object(backtest.time, 'sleep'), patch.object(backtest, 'CACHE'):
+            with self.assertRaisesRegex(RuntimeError, 'key 无效'):
+                backtest.fetch()
+
 
 if __name__ == '__main__':
     unittest.main()

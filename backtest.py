@@ -48,23 +48,49 @@ CONFIGS = [
 
 # ---------------------------------------------------------------- data
 def fetch(years=5):
+    """Batch endpoint first (10 codes per call); if the key lacks permission for it,
+    fall back to the single-ETF endpoint that production already uses."""
     key = radar.api_key()
     cutoff = radar.completed_cutoff()
-    start = dt.datetime.combine(cutoff - dt.timedelta(days=365 * years - 2), dt.time(), radar.TZ)
+    days = 365 * years - 2  # API window is at most 5 natural years
+    start = dt.datetime.combine(cutoff - dt.timedelta(days=days), dt.time(), radar.TZ)
     end = dt.datetime.combine(cutoff, dt.time(23, 59, 59), radar.TZ)
     codes = [c for items in ETF_GROUPS.values() for c, _ in items]
     entries = {}
+    batch = True
     for i in range(0, len(codes), 10):
         chunk = codes[i:i + 10]
-        p = radar.api_get('/api/fund/market/historical-batch', dict(
-            thscodes=','.join(radar.thscode_of(c) for c in chunk), interval='1d',
-            start=int(start.timestamp() * 1000), end=int(end.timestamp() * 1000)), key)
-        groups = {g.get('thscode'): g.get('item') or [] for g in (p.get('data') or {}).get('item') or []}
+        if batch:
+            try:
+                p = radar.api_get('/api/fund/market/historical-batch', dict(
+                    thscodes=','.join(radar.thscode_of(c) for c in chunk), interval='1d',
+                    start=int(start.timestamp() * 1000), end=int(end.timestamp() * 1000)), key)
+            except radar.APIError as exc:
+                if exc.code not in radar.AUTH_API_CODES:
+                    raise
+                print(f'批量接口不可用（业务码 {exc.code}），改用单只接口逐只获取', flush=True)
+                batch = False
+            else:
+                groups = {g.get('thscode'): g.get('item') or [] for g in (p.get('data') or {}).get('item') or []}
+                for c in chunk:
+                    rows = radar.normalize(groups.get(radar.thscode_of(c), []), cutoff)
+                    entries[c] = dict(rows=rows, source='同花顺金融API', adjustment='qfq')
+                    print(f'{c} {len(rows)} bars', flush=True)
+                time.sleep(.4)
+                continue
         for c in chunk:
-            rows = radar.normalize(groups.get(radar.thscode_of(c), []), cutoff)
+            try:
+                rows = radar.request_history(c, key, days=days, min_bars=1)['rows']
+            except radar.APIError as exc:
+                if exc.code in radar.AUTH_API_CODES:
+                    raise RuntimeError(f'单只接口也返回业务码 {exc.code}：key 无效或没有行情权限，请在同花顺 API Key 管理页检查。') from None
+                raise
+            except ValueError as exc:
+                print(f'{c} 无数据：{exc}', flush=True)
+                rows = []
             entries[c] = dict(rows=rows, source='同花顺金融API', adjustment='qfq')
             print(f'{c} {len(rows)} bars', flush=True)
-        time.sleep(.4)
+            time.sleep(.4)
     CACHE.parent.mkdir(exist_ok=True)
     CACHE.write_text(json.dumps(dict(fetched_at=dt.datetime.now(radar.TZ).isoformat(timespec='seconds'),
                                      universe_version=UNIVERSE_VERSION, entries=entries), ensure_ascii=False))
