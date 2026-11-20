@@ -19,6 +19,9 @@ TZ=dt.timezone(dt.timedelta(hours=8))
 CACHE=ROOT/'data_cache/hithink_klines.json'
 BASE='https://fuyao.aicubes.cn'
 BENCHMARK='510300'
+# Percentile scores are only meaningful when nearly the whole universe is ranked together.
+MIN_COVERAGE=0.9
+AUTH_API_CODES=(2001,2003)
 
 def api_key():
     value=os.environ.get('HITHINK_API_KEY','').strip()
@@ -39,6 +42,9 @@ class APIError(RuntimeError):
         self.code=code
         super().__init__(f'同花顺业务错误 {code}；request_id={request_id or "未提供"}')
 
+class AuthError(RuntimeError):
+    """Credential rejected; abort the whole run instead of degrading to cache."""
+
 def request_history(code,key):
     cutoff=completed_cutoff()
     start=dt.datetime.combine(cutoff-dt.timedelta(days=370),dt.time(),TZ)
@@ -58,6 +64,7 @@ def request_history(code,key):
         except APIError as exc:
             if exc.code not in (4001,5001,5002,5003) or attempt==3:raise
         except urllib.error.HTTPError as exc:
+            if exc.code in (401,403):raise AuthError(f'同花顺认证失败 HTTP {exc.code}；请检查 HITHINK_API_KEY。') from None
             if exc.code not in (429,500,502,503,504) or attempt==3:raise RuntimeError(f'HTTP {exc.code}') from None
         except (urllib.error.URLError,TimeoutError):
             if attempt==3:raise RuntimeError('同花顺连接超时或网络不可用') from None
@@ -85,8 +92,9 @@ def atr14(frame):
     return tr.rolling(14).mean()
 
 def metrics(entries):
-    latest=max((e['rows'][-1]['date'] for e in entries.values() if e.get('rows')),default=None)
+    # Anchor on the benchmark: one ETF with an extra session excludes only itself.
     benchmark=entries.get(BENCHMARK,{}).get('rows',[])
+    latest=benchmark[-1]['date'] if benchmark else None
     rows=[]
     for group,items in ETF_GROUPS.items():
         for code,name in items:
@@ -188,12 +196,21 @@ def publish(payload):
     (out/'etf_data.json').write_text(encoded,encoding='utf-8')
     return out
 
+def check_coverage(rows):
+    eligible=sum(r['eligible'] for r in rows)
+    if not eligible:raise RuntimeError('无日期对齐且满121根的同花顺数据，保留已发布页面。')
+    if eligible<math.ceil(len(rows)*MIN_COVERAGE):
+        raise RuntimeError(f'有效样本 {eligible}/{len(rows)} 低于 {MIN_COVERAGE:.0%}，百分位评分口径不可比，保留已发布页面。')
+
 def build(offline=False,render=False):
     cache=json.loads(CACHE.read_text()) if CACHE.exists() else {}
     if render:
+        missing=[c for items in ETF_GROUPS.values() for c,_ in items if not cache.get(c,{}).get('rows')]
+        if missing:raise RuntimeError(f'缓存缺少 {len(missing)} 只观察池ETF，无法离线重绘，请联网运行。')
         payload=json.loads((ROOT/'reports/etf_data.json').read_text())
         previous=dict(payload)
         payload['rows'],payload['asof']=metrics(cache)
+        check_coverage(payload['rows'])
         payload['universe_version']=UNIVERSE_VERSION
         attach_comparison(payload,previous)
         publish(payload);return
@@ -207,15 +224,16 @@ def build(offline=False,render=False):
                 fresh=request_history(code,key)
                 if not old.get('rows') or fresh['rows'][-1]['date']>=old['rows'][-1]['date']:entry=fresh
                 else:errors.append(f'{code}：上游日期落后于缓存，保留较新批次。')
+            except AuthError:raise
             except APIError as exc:
-                if exc.code in (2001,2003):raise
+                if exc.code in AUTH_API_CODES:raise
                 errors.append(f'{code}：{exc}')
             except Exception as exc:errors.append(f'{code}：{type(exc).__name__}: {exc}')
             time.sleep(.4)
         entries[code]=entry
         print(f'同花顺 {i}/{len(tasks)} {code} {len(entry["rows"])} bars',flush=True)
     rows,latest=metrics(entries)
-    if not any(r['eligible'] for r in rows):raise RuntimeError('无日期对齐且满121根的同花顺数据，保留已发布页面。')
+    check_coverage(rows)
     now=dt.datetime.now(TZ)
     payload=dict(rows=rows,asof=latest,generated=now.isoformat(timespec='seconds'),errors=errors,offline=offline,provider='同花顺金融API',benchmark='510300',model='us-momentum-v1',universe_version=UNIVERSE_VERSION,requested_cutoff=completed_cutoff(now).isoformat())
     attach_comparison(payload, published_snapshot() if not offline else None)

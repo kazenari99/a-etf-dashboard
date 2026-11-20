@@ -13,7 +13,7 @@
 
 ## 数据源
 
-生产流程统一使用**同花顺金融API**，不使用OpenD、东方财富、BaoStock或Tushare。端点：`https://fuyao.aicubes.cn/api/fund/market/historical`，仅服务端发送 `X-api-key` 请求头。使用前复权OHLC、真实成交额，单次获取约370自然日，至少121根完整日线。请求串行且间隔0.4秒；动态限流和上游错误采用有界指数退避，认证错误立即终止。源故障仅回退同源缓存并明确标记，绝不混用其他复权批次。
+生产流程统一使用**同花顺金融API**，不使用OpenD、东方财富、BaoStock或Tushare。端点：`https://fuyao.aicubes.cn/api/fund/market/historical`，仅服务端发送 `X-api-key` 请求头。使用前复权OHLC、真实成交额，单次获取约370自然日，至少121根完整日线。请求串行且间隔0.4秒；动态限流和上游错误采用有界指数退避，认证错误立即终止。源故障仅回退同源缓存并明确标记，绝不混用其他复权批次。认证失败（业务码2001/2003或HTTP 401/403）立即终止整次运行，不回退缓存。有效样本低于观察池90%时不发布，避免在缩小的样本上重算百分位导致评分口径漂移。日期对齐以基准510300的最新交易日为锚点。
 
 [同花顺官方接口文档](https://github.com/HiThink-Tech/Financial-API/blob/main/docs/api/fund/fund-market.md)和[使用约束](https://github.com/HiThink-Tech/Financial-API#使用约束)：目前不设累计调用次数上限，但有动态限流；实际权限以账户与服务端为准。
 
@@ -46,7 +46,7 @@ python -m http.server 8766 --bind 127.0.0.1
 
 ## 每日自动更新与发布
 
-GitHub Actions工作日北京时间19:00计划执行，实际调度可能延迟。推送main、手动运行也会抓取更新。仓库Secret名为`HITHINK_API_KEY`；密钥只在抓取步骤注入，不出现在网页、JSON、代码、日志或缓存中。不要在前端调用带key的API。
+GitHub Actions工作日北京时间19:00计划执行，实际调度可能延迟。手动运行也会抓取更新。推送main时优先用Actions缓存中的上一批数据 `--render` 重绘、不调用API；缓存缺失、观察池有变更或有效样本不足时自动改为联网抓取。仓库Secret名为`HITHINK_API_KEY`；密钥只在抓取步骤注入，不出现在网页、JSON、代码、日志或缓存中。不要在前端调用带key的API。
 
 首页：[JADE PULSE](https://jade-a.pages.dev/)。Pages只上传根路径首页，不再发布旧的 `/reports/etf_dashboard.html` 路径。每次联网运行按时间归档；Actions研究归档保留90天。本地归档路径`archive/YYYY-MM-DD/HHMMSS/`。源不可用且无足够缓存时发布失败，保留线上上一版。
 
