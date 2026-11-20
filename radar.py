@@ -119,8 +119,8 @@ def _num(v):
 def analyze(entries):
     """Rows for every universe ETF, the latest session and the market regime.
 
-    The published score is model.V1 (US-version parity). model.V2 is computed alongside as
-    an unvalidated shadow (score_v2/setup_v2) until backtest.py supports switching.
+    The published score is model.PROD (V1 without the overheat penalty, with label
+    hysteresis); see model.py and backtest.py for why.
     """
     universe=[(group,code,name) for group,items in ETF_GROUPS.items() for code,name in items]
     benchmark=entries.get(BENCHMARK,{}).get('rows',[])
@@ -131,19 +131,17 @@ def analyze(entries):
         for t,e in entries.items():
             bars=e.get('rows') or []
             if not bars or bars[-1]['date']!=latest:panel['eligible'].loc[latest,t]=False
-        v1=model.score_panel(panel,model.V1,ASSET_CLASS,CLUSTERS)
-        v2=model.score_panel(panel,model.V2,ASSET_CLASS,CLUSTERS)
-        reps=model.representatives(panel,v2['ranked'],CLUSTERS)
+        prod=model.score_panel(panel,model.PROD,ASSET_CLASS,CLUSTERS)
         absolute=model.absolute_momentum(panel)
         state=model.regime(panel,ASSET_CLASS).loc[latest]
-        regime=dict(state=state['state'],breadth60=_num(state['breadth60']),bench_r120=_num(state['bench_r120']),hurdle=float(state['hurdle']),model=model.V2.name)
+        regime=dict(state=state['state'],breadth60=_num(state['breadth60']),bench_r120=_num(state['bench_r120']),hurdle=float(state['hurdle']))
     else:
         regime=None
     rows=[]
     for group,code,name in universe:
         e=entries.get(code,{})
         bars=e.get('rows',[])
-        r=dict(ticker=code,name=name,group=group,asset_class=ASSET_CLASS.get(code,'equity'),cluster=CLUSTER_OF.get(code),date=bars[-1]['date'] if bars else None,source=e.get('source','同花顺金融API'),cached=e.get('cached',False),setup='Data unavailable',eligible=False,score=None,score_v2=None,setup_v2='Data unavailable')
+        r=dict(ticker=code,name=name,group=group,asset_class=ASSET_CLASS.get(code,'equity'),cluster=CLUSTER_OF.get(code),date=bars[-1]['date'] if bars else None,source=e.get('source','同花顺金融API'),cached=e.get('cached',False),setup='Data unavailable',eligible=False,score=None)
         if code in CROSS_BORDER:
             r['premium']=premium(bars,e.get('nav'));r['nav_date']=(e.get('nav') or {}).get('date')
         if panel is None or code not in panel['eligible'] or not panel['eligible'].at[latest,code]:
@@ -156,11 +154,9 @@ def analyze(entries):
         stop=min(ema20,g('low10'))-.5*atr
         high20=g('high20_prev')
         amounts=pd.to_numeric(pd.Series([b.get('turnover') for b in bars[-20:]]),errors='coerce')
-        score_v2=v2['score'].at[latest,code]
         r.update(close=last,ema20=ema20,sma50=g('sma50'),sma120=g('sma120'),atr14=atr,atr_pct=atr/last,dist_ema_atr=g('dist_ema_atr'),vol20_ann=g('vol20'),from_high120=g('from_high120'),high20_prev=high20,breakout_trigger=high20+.1*atr,pullback_low=ema20-.5*atr,pullback_high=ema20+.5*atr,stop_ref=stop,stop_pct=stop/last-1,adtv20=float(amounts.mean()) if len(amounts)==20 and amounts.notna().all() else None,trend_aligned=bool(panel['trend_aligned'].at[latest,code]),eligible=True,
-                 setup=v1['setup'].at[latest,code],score=float(v1['score'].at[latest,code]),
-                 score_v2=float(score_v2) if pd.notna(score_v2) else None,setup_v2=v2['setup'].at[latest,code],
-                 ranked_v2=bool(v2['ranked'].at[latest,code]),cluster_rep=bool(reps.at[latest,code]),abs_momentum=bool(absolute.at[latest,code]),
+                 setup=prod['setup'].at[latest,code],score=float(prod['score'].at[latest,code]),
+                 abs_momentum=bool(absolute.at[latest,code]),
                  history=[dict(date=b['date'],close=b['close']) for b in bars[-120:]])
         rows.append(r)
     rows.sort(key=lambda r:r['score'] if r['score'] is not None else -math.inf,reverse=True)
@@ -283,7 +279,7 @@ def build(offline=False,render=False):
     check_coverage(rows)
     now=dt.datetime.now(TZ)
     if not trading_calendar.known(now.year):errors.append(f'trading_calendar.py 未收录{now.year}年休市安排，仅按工作日判断截止日；交易所公布后请补充。')
-    payload=dict(rows=rows,asof=latest,generated=now.isoformat(timespec='seconds'),errors=errors,offline=offline,provider='同花顺金融API',benchmark='510300',model=model.V1.name,regime=regime,universe_version=UNIVERSE_VERSION,requested_cutoff=completed_cutoff(now).isoformat())
+    payload=dict(rows=rows,asof=latest,generated=now.isoformat(timespec='seconds'),errors=errors,offline=offline,provider='同花顺金融API',benchmark='510300',model=model.PROD.name,regime=regime,universe_version=UNIVERSE_VERSION,requested_cutoff=completed_cutoff(now).isoformat())
     attach_comparison(payload, published_snapshot() if not offline else None)
     out=publish(payload)
     if not offline:

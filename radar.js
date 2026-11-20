@@ -1,7 +1,7 @@
 const state = { data: [], filtered: [], sortKey: 'score', sortDir: -1, selected: null, setup: 'all', group: 'all', query: '', watchOnly: false, favorites: [] };
 const $ = (s) => document.querySelector(s);
 const svgNS = 'http://www.w3.org/2000/svg';
-const setupNames = { 'Momentum':'动量成立', 'Strong / wait pullback':'强势·等回踩', 'Pullback watch':'等待确认', 'Avoid / broken':'趋势破坏' };
+const setupNames = { 'Momentum':'动量成立', 'Strong / wait pullback':'加速强势', 'Pullback watch':'等待确认', 'Avoid / broken':'趋势破坏' };
 
 // Chinese display labels describe each fund; not official legal names.
 const payload=JSON.parse(document.getElementById('dataset').textContent);
@@ -12,7 +12,7 @@ const pct=v=>finite(v)?`${v>=0?'+':''}${(v*100).toFixed(1)}%`:'—';
 const price=v=>finite(v)?v.toLocaleString('zh-CN',{minimumFractionDigits:3,maximumFractionDigits:3}):'—';
 const cls=v=>finite(v)?v>=0?'positive':'negative':'';
 const scoreText=v=>finite(v)?v.toFixed(1):'—';
-const statusClass=s=>s==='Momentum'?'momentum':(s.includes('wait')||s==='Pullback watch')?'wait':'avoid';
+const statusClass=s=>(s==='Momentum'||s==='Strong / wait pullback')?'momentum':s==='Pullback watch'?'wait':'avoid';
 const escapeHTML=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 setupNames['Data unavailable']='数据不足 / 日期不齐';
 let previousFocus=null;
@@ -98,7 +98,7 @@ function renderTable(){
 
 function openDrawer(x){
   if(!x)return; previousFocus=document.activeElement;state.selected=x;
-  $('#drawerContent').innerHTML=`<p class="section-kicker">ETF DETAIL</p><h2 class="detail-code">${x.ticker}</h2><p class="detail-meta">${etfName(x.ticker)}</p><p class="detail-meta">${escapeHTML(x.group)} · ${x.date||'无有效日期'} · ${x.cached?'同源缓存':'同花顺前复权日线'} · 收盘 ¥${price(x.close)}</p><div class="detail-score"><b>${scoreText(x.score)}</b><span>综合动量评分</span></div><div class="detail-grid">${[["20日收益",pct(x.r20),cls(x.r20)],["60日收益",pct(x.r60),cls(x.r60)],["120日收益",pct(x.r120),cls(x.r120)],["60日相对沪深300",pct(x.rs60),cls(x.rs60)],["ATR / 价格",`${(finite(x.atr_pct)?(x.atr_pct*100).toFixed(2):'—')}%`,''],["距120日高点",pct(x.from_high120),cls(x.from_high120)]].map(v=>`<div class="detail-stat"><span>${v[0]}</span><b class="${v[2]}">${v[1]}</b></div>`).join('')}</div>${premiumDetail(x)}<div class="trade-plan"><h3>${setupNames[x.setup]}</h3><div class="trade-step"><i>01</i><div>等待价格进入回踩观察区 <b>${price(x.pullback_low)}–${price(x.pullback_high)}</b>，观察是否止跌。</div></div><div class="trade-step"><i>02</i><div>趋势延续的突破触发参考为 <b>${price(x.breakout_trigger)}</b>。</div></div><div class="trade-step"><i>03</i><div>结构失效参考 <b>${price(x.stop_ref)}</b>；当前至该位置约 <b>${pct(x.stop_pct)}</b>。</div></div></div>${shadowDetail(x)}`;
+  $('#drawerContent').innerHTML=`<p class="section-kicker">ETF DETAIL</p><h2 class="detail-code">${x.ticker}</h2><p class="detail-meta">${etfName(x.ticker)}</p><p class="detail-meta">${escapeHTML(x.group)} · ${x.date||'无有效日期'} · ${x.cached?'同源缓存':'同花顺前复权日线'} · 收盘 ¥${price(x.close)}</p><div class="detail-score"><b>${scoreText(x.score)}</b><span>综合动量评分</span></div><div class="detail-grid">${[["20日收益",pct(x.r20),cls(x.r20)],["60日收益",pct(x.r60),cls(x.r60)],["120日收益",pct(x.r120),cls(x.r120)],["60日相对沪深300",pct(x.rs60),cls(x.rs60)],["ATR / 价格",`${(finite(x.atr_pct)?(x.atr_pct*100).toFixed(2):'—')}%`,''],["距120日高点",pct(x.from_high120),cls(x.from_high120)]].map(v=>`<div class="detail-stat"><span>${v[0]}</span><b class="${v[2]}">${v[1]}</b></div>`).join('')}</div>${premiumDetail(x)}<div class="trade-plan"><h3>${setupNames[x.setup]}</h3><div class="trade-step"><i>01</i><div>${x.setup==='Strong / wait pullback'?`距EMA20超过2.5倍ATR，处于加速段；回踩区 <b>${price(x.pullback_low)}–${price(x.pullback_high)}</b> 仅作参考，2022–2026年回测中此类状态之后未见系统性回落，追高波动也更大。`:`回踩观察区 <b>${price(x.pullback_low)}–${price(x.pullback_high)}</b>，观察是否止跌。`}</div></div><div class="trade-step"><i>02</i><div>趋势延续的突破触发参考为 <b>${price(x.breakout_trigger)}</b>。</div></div><div class="trade-step"><i>03</i><div>结构失效参考 <b>${price(x.stop_ref)}</b>；当前至该位置约 <b>${pct(x.stop_pct)}</b>。</div></div></div>${exposureDetail(x)}`;
   $('#detailDrawer').inert=false;$('#detailDrawer').classList.add('open');$('#drawerBackdrop').classList.add('open');$('#detailDrawer').setAttribute('aria-hidden','false');$('#drawerClose').focus();
 }
 function closeDrawer(){ $('#detailDrawer').classList.remove('open');$('#drawerBackdrop').classList.remove('open');$('#detailDrawer').setAttribute('aria-hidden','true');$('#detailDrawer').inert=true;previousFocus?.focus(); }
@@ -176,19 +176,17 @@ function premiumDetail(x){
   const warn=Math.abs(x.premium)>=.03?'溢价变化会直接影响场内收益，动量中可能含有溢价扩张成分。':'溢折价处于常见范围。';
   return `<p class="detail-note">跨境ETF · 相对 ${escapeHTML(x.nav_date)} 单位净值 <b class="${x.premium>=.03?'negative':''}">${x.premium>0?'溢价':'折价'} ${(Math.abs(x.premium)*100).toFixed(2)}%</b>。${warn}</p>`;
 }
-function shadowDetail(x){
-  if(!x.eligible)return '';
-  const cluster=x.cluster?`同类暴露「${escapeHTML(x.cluster)}」：${clusterMembers[x.cluster].map(t=>`${etfName(t)} ${t}`).join('、')}。${x.cluster_rep?'本只为当前排名代表（成交额最高）。':'按代表产品的分布定位，不重复拉伸排名。'}`:'无同类重复暴露。';
-  const body=x.asset_class!=='equity'
-    ?`${assetNames[x.asset_class]}类资产在 v2 中不参与权益排名，改看绝对动量：<b>${x.abs_momentum?'成立':'不成立'}</b>（120日收益高于现金门槛且收盘在120日均线上方）。`
-    :x.ranked_v2?`v2 评分 <b>${scoreText(x.score_v2)}</b> · 状态 <b>${setupNames[x.setup_v2]||'—'}</b>。${cluster}`:`成交额低于 v2 流动性门槛，未参与 v2 排名。${cluster}`;
-  return `<div class="shadow-panel"><h3>实验模型 v2 <span>未验证 · 仅供对照</span></h3><p>${body}</p><p class="detail-note">v2：跳过近5日的20日收益、按波动率调整、连续过热扣分、仅权益排名、同类去重、3日平滑、状态缓冲。回测确认改善前，页面主评分仍为 v1。</p></div>`;
+function exposureDetail(x){
+  const lines=[];
+  if(x.cluster)lines.push(`同类暴露「${escapeHTML(x.cluster)}」：${clusterMembers[x.cluster].filter(t=>t!==x.ticker).map(t=>`${etfName(t)} ${t}`).join('、')}。近一年日收益相关性 ≥ 0.95，排名靠前时可能代表同一主题。`);
+  if(x.eligible&&x.asset_class!=='equity')lines.push(`${assetNames[x.asset_class]}类资产与股票ETF一起做百分位排名，排名仅表示相对强弱；绝对动量 <b>${x.abs_momentum?'成立':'不成立'}</b>（120日收益高于现金门槛且收盘在120日均线上方）。`);
+  return lines.length?`<div class="shadow-panel"><h3>暴露与资产类别</h3>${lines.map(l=>`<p>${l}</p>`).join('')}</div>`:'';
 }
 function renderRegimeState(){
   const r=payload.regime;if(!r)return;
   const map={risk_on:['偏进攻','sector-up'],neutral:['中性','sector-flat'],risk_off:['偏防守','sector-down']};
   const [label,klass]=map[r.state]||['—',''];
-  $('#regimeState').innerHTML=`<span class="regime-chip ${r.state}">双动量状态 · ${label}</span><small>沪深300 120日 ${pct(r.bench_r120)} vs 现金门槛 ${pct(r.hurdle)} · 权益60日上涨占比 ${finite(r.breadth60)?Math.round(r.breadth60*100)+'%':'—'}${r.state==='risk_off'?' · 熊市反弹期动量信号易失效，谨慎看待排名':''}</small>`;
+  $('#regimeState').innerHTML=`<span class="regime-chip ${r.state}">双动量状态 · ${label}</span><small>沪深300 120日 ${pct(r.bench_r120)} vs 现金门槛 ${pct(r.hurdle)} · 权益60日上涨占比 ${finite(r.breadth60)?Math.round(r.breadth60*100)+'%':'—'}${r.state==='risk_off'?' · 回测中偏防守阶段排名与后续收益平均为负相关，但并不稳定':''}</small>`;
 }
 function trapFocus(e){
   const items=[...$('#detailDrawer').querySelectorAll('button,[href],[tabindex]:not([tabindex="-1"])')].filter(el=>!el.disabled);

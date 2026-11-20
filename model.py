@@ -4,9 +4,11 @@ Every indicator is causal (shift >= 0, rolling windows, ewm with adjust=False), 
 value at date t only uses bars up to t. That lets production read the last row and the
 backtest read every row from one computation.
 
-``V1`` reproduces the US ETF Momentum Radar exactly (tests/fixtures/us_model_parity.json).
-Other configs are research candidates; production only shows them as a shadow score
-until the backtest (backtest.py) shows they improve forward-return ranking.
+``V1`` reproduces the US ETF Momentum Radar exactly (tests/fixtures/us_model_parity.json)
+and is the backtest baseline. ``PROD`` is what the A-share page publishes: V1 without the
+overheat penalty (2021-2026 backtest: names > 2.5 ATR above EMA20 kept outperforming) and
+with hysteresis on the strong label (halves label churn, score unchanged). V2 bundles the
+other candidates; it did not beat V1 and is kept only as a backtest row.
 """
 from __future__ import annotations
 
@@ -45,6 +47,7 @@ class ModelConfig:
 V1 = ModelConfig()
 V2 = V1.variant('a-momentum-v2-candidate', skip_recent=5, risk_adjust=True, overheat='linear',
                 rank_scope='equity', dedupe=True, min_adtv=2e7, smooth=3, hysteresis=True)
+PROD = V1.variant('a-momentum-v1.1', overheat_penalty=0.0, hysteresis=True)
 CASH_RATE = 0.015  # annual hurdle for absolute momentum (roughly short-term deposit/repo yield)
 
 

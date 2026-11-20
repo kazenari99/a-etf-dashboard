@@ -25,12 +25,25 @@ class ModelTests(unittest.TestCase):
         self.assertEqual(pct.at[0, 'C'], 1 / 3)  # C keeps its place on a 3-name scale
         self.assertAlmostEqual(pct.at[0, 'D'], 2.5 / 3)  # D placed between B and A
 
-    def test_v1_is_published_score_and_v2_is_shadow(self):
-        rows, _, regime = radar.analyze(self.entries())
-        ranked = [r for r in rows if r['eligible']]
-        self.assertTrue(all(isinstance(r['score'], float) for r in ranked))
-        self.assertTrue(all('score_v2' in r and 'setup_v2' in r for r in ranked))
+    def test_published_score_is_v1_without_overheat_penalty(self):
+        entries = self.entries()
+        rows, latest, regime = radar.analyze(entries)
+        p = model.build_panel(entries, radar.BENCHMARK)
+        v1 = model.score_panel(p, model.V1)['score']
+        for r in (r for r in rows if r['eligible']):
+            penalty = 8 if r['dist_ema_atr'] > 2.5 else 0
+            self.assertAlmostEqual(r['score'], v1.at[latest, r['ticker']] + penalty, places=10)
+            self.assertNotIn('score_v2', r)
         self.assertIn(regime['state'], ('risk_on', 'neutral', 'risk_off'))
+
+    def test_overheated_name_gains_exactly_the_penalty(self):
+        entries = self.entries()
+        p = model.build_panel(entries, radar.BENCHMARK)
+        p['dist_ema_atr'] = p['dist_ema_atr'].copy()
+        p['dist_ema_atr'].iloc[-1, 0] = 3.0
+        a = model.score_panel(p, model.V1)['score'].iloc[-1, 0]
+        b = model.score_panel(p, model.PROD)['score'].iloc[-1, 0]
+        self.assertAlmostEqual(b - a, 8.0)
 
     def test_equity_scope_leaves_bonds_unranked(self):
         entries = self.entries()

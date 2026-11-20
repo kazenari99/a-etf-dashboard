@@ -9,7 +9,12 @@ FIXTURE=json.loads((Path(__file__).parent/'fixtures/us_model_parity.json').read_
 class RadarTests(unittest.TestCase):
     def entries(self):return json.loads(json.dumps(FIXTURE['entries']))
     def test_existing_us_model_numerical_parity(self):
-        rows,_=radar.metrics(self.entries());actual={r['ticker']:r for r in rows}
+        entries=self.entries()
+        rows,latest=radar.metrics(entries);actual={r['ticker']:r for r in rows}
+        # Score/setup parity is checked on model.V1 (the US formula); production publishes PROD.
+        v1=radar.model.score_panel(radar.model.build_panel(entries,radar.BENCHMARK),radar.model.V1)
+        for r in rows:
+            if r['eligible']:r.update(score=float(v1['score'].at[latest,r['ticker']]),setup=v1['setup'].at[latest,r['ticker']])
         for expected in FIXTURE['expected']:
             result=actual[expected['ticker']]
             for key in ('score','r20','r60','r120','rs20','rs60','rs120','ema20','sma50','sma120','atr14','atr_pct','dist_ema_atr','from_high120','breakout_trigger','pullback_low','pullback_high','stop_ref','stop_pct','vol20_ann','adtv20'):

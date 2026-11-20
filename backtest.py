@@ -34,6 +34,7 @@ EVAL_MIN_ADTV = 2e7  # evaluate on names that are tradeable in size (yuan/day)
 V1 = model.V1
 CONFIGS = [
     V1,
+    model.PROD,
     V1.variant('v1 无加减分', trend_bonus=0, rs_bonus=0, overheat_penalty=0),
     V1.variant('v1 + 跳过近5日', skip_recent=5),
     V1.variant('v1 + 风险调整', risk_adjust=True),
