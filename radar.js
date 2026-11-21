@@ -90,9 +90,9 @@ function renderOpportunities(){
 
 function renderTable(){
   $('#resultCount').textContent=`显示 ${state.filtered.length} / ${state.data.length} 只`;
-  $('#tableBody').innerHTML=state.filtered.map(x=>`<tr data-code="${x.ticker}" tabindex="0" role="button" aria-label="查看${x.ticker}详情"><td><button class="favorite" data-favorite="${x.ticker}" aria-label="${state.favorites.includes(x.ticker)?'取消收藏':'收藏'}${x.ticker}" aria-pressed="${state.favorites.includes(x.ticker)}">${state.favorites.includes(x.ticker)?'★':'☆'}</button></td><td class="ticker-cell"><span class="ticker-code">${x.ticker}</span><span class="ticker-name">${etfName(x.ticker)}${premiumChip(x)}</span></td><td class="group-label">${escapeHTML(x.group)}</td><td class="num">¥${price(x.close)}</td><td class="num ${cls(x.r20)}">${pct(x.r20)}</td><td class="num ${cls(x.r60)}">${pct(x.r60)}</td><td class="num ${cls(x.r120)}">${pct(x.r120)}</td><td class="num ${cls(x.rs60)}">${pct(x.rs60)}</td><td class="num">${(finite(x.atr_pct)?(x.atr_pct*100).toFixed(1):'—')}%</td><td class="num score-cell">${scoreText(x.score)}</td><td class="rank-change">${rankChange(x.ticker)}</td><td><span class="table-chip ${statusClass(x.setup)}">${setupNames[x.setup]}</span></td></tr>`).join('');
+  $('#tableBody').innerHTML=state.filtered.map(x=>`<tr data-code="${x.ticker}" tabindex="0" role="button" aria-label="查看${x.ticker}详情"><td><button class="favorite" data-favorite="${x.ticker}" aria-label="${state.favorites.includes(x.ticker)?'取消收藏':'收藏'}${x.ticker}" aria-pressed="${state.favorites.includes(x.ticker)}">${state.favorites.includes(x.ticker)?'★':'☆'}</button></td><td class="ticker-cell"><span class="ticker-code">${x.ticker}</span><span class="ticker-name">${etfName(x.ticker)}${premiumChip(x)}${weeklySet.has(x.ticker)?'<span class="pick-chip">周清单</span>':''}</span></td><td class="group-label">${escapeHTML(x.group)}</td><td class="num">¥${price(x.close)}</td><td class="num ${cls(x.r20)}">${pct(x.r20)}</td><td class="num ${cls(x.r60)}">${pct(x.r60)}</td><td class="num ${cls(x.r120)}">${pct(x.r120)}</td><td class="num ${cls(x.rs60)}">${pct(x.rs60)}</td><td class="num">${(finite(x.atr_pct)?(x.atr_pct*100).toFixed(1):'—')}%</td><td class="num ${x.near_high250===0?'positive':''}">${finite(x.near_high250)?(x.near_high250===0?'新高':pct(x.near_high250)):'—'}</td><td class="num score-cell">${scoreText(x.score)}</td><td class="rank-change">${rankChange(x.ticker)}</td><td><span class="table-chip ${statusClass(x.setup)}">${setupNames[x.setup]}</span></td></tr>`).join('');
   document.querySelectorAll('[data-favorite]').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();const t=b.dataset.favorite;state.favorites=state.favorites.includes(t)?state.favorites.filter(v=>v!==t):[...state.favorites,t];applyFilters();}));
-  if(!state.filtered.length)$('#tableBody').innerHTML='<tr><td colspan="12" class="empty-note">没有符合条件的 ETF；可重置筛选或取消「仅看自选」。</td></tr>';
+  if(!state.filtered.length)$('#tableBody').innerHTML='<tr><td colspan="13" class="empty-note">没有符合条件的 ETF；可重置筛选或取消「仅看自选」。</td></tr>';
   document.querySelectorAll('#tableBody tr[data-code]').forEach(el=>{const open=()=>openDrawer(state.data.find(x=>x.ticker===el.dataset.code));el.addEventListener('click',open);el.addEventListener('keydown',e=>{if(e.target===el&&e.key==='Enter')open();});});
 }
 
@@ -160,7 +160,7 @@ function init(){
   $('#healthLog').innerHTML=payload.errors.length?'<ul>'+payload.errors.map(e=>`<li>${escapeHTML(e)}</li>`).join('')+'</ul>':'<p>本次同花顺行情请求全部完成。'+(cached?'存在缓存，请查看数据时间。':'未使用缓存。')+'</p>';
   const groups=[...new Set(state.data.map(x=>x.group))];$('#groupSelect').innerHTML+=groups.map(g=>`<option value="${escapeHTML(g)}">${escapeHTML(g)}</option>`).join('');
   document.querySelectorAll('th[data-sort]').forEach(th=>{th.setAttribute('tabindex','0');th.setAttribute('role','button');th.addEventListener('keydown',e=>{if(e.key==='Enter')th.click();});});
-  restorePreferences();renderKPIs();renderRegimeState();renderChanges();bind();applyFilters();
+  restorePreferences();renderWeekly();renderKPIs();renderRegimeState();renderChanges();bind();applyFilters();
  }catch(err){document.querySelector('main').innerHTML=`<div class="error-state"><h2>数据载入失败</h2><p>${escapeHTML(err.message)}</p></div>`;}
 }
 
@@ -186,7 +186,8 @@ function renderRegimeState(){
   const r=payload.regime;if(!r)return;
   const map={risk_on:['偏进攻','sector-up'],neutral:['中性','sector-flat'],risk_off:['偏防守','sector-down']};
   const [label,klass]=map[r.state]||['—',''];
-  $('#regimeState').innerHTML=`<span class="regime-chip ${r.state}">双动量状态 · ${label}</span><small>沪深300 120日 ${pct(r.bench_r120)} vs 现金门槛 ${pct(r.hurdle)} · 权益60日上涨占比 ${finite(r.breadth60)?Math.round(r.breadth60*100)+'%':'—'}${r.state==='risk_off'?' · 回测中偏防守阶段排名与后续收益平均为负相关，但并不稳定':''}</small>`;
+  $('#regimeState').innerHTML=`<span class="regime-chip ${r.state}">双动量状态 · ${label}</span><small>沪深300 120日 ${pct(r.bench_r120)} vs 现金门槛 ${pct(r.hurdle)} · 权益60日上涨占比 ${finite(r.breadth60)?Math.round(r.breadth60*100)+'%':'—'}</small><small class="regime-caveat">仅作背景：2022–2026回测中，按大盘趋势进出（如跌破200日线换国债）跑输一直持有沪深300，因此不作为买卖信号。</small>`;
+  renderIndexStrip();
 }
 function trapFocus(e){
   const items=[...$('#detailDrawer').querySelectorAll('button,[href],[tabindex]:not([tabindex="-1"])')].filter(el=>!el.disabled);
@@ -195,5 +196,54 @@ function trapFocus(e){
   if(!$('#detailDrawer').contains(document.activeElement)){e.preventDefault();first.focus();}
   else if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus();}
   else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus();}
+}
+const weekly=payload.weekly;
+const weeklySet=new Set((weekly&&weekly.picks||[]).map(p=>p.ticker));
+function navChart(nav){
+  const W=520,H=150,P=8;const vals=nav.flatMap(p=>[p.s,p.b,p.e]);const lo=Math.min(1,...vals),hi=Math.max(1,...vals);
+  const x=i=>P+(W-2*P)*(nav.length<2?1:i/(nav.length-1)),y=v=>H-P-(H-2*P)*((v-lo)/((hi-lo)||1));
+  const line=k=>nav.map((p,i)=>`${i?'L':'M'}${x(i).toFixed(1)},${y(p[k]).toFixed(1)}`).join('');
+  return `<svg class="track-chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="纸面跟踪净值"><line x1="${P}" x2="${W-P}" y1="${y(1)}" y2="${y(1)}" class="base"/><path d="${line('e')}" class="ew"/><path d="${line('b')}" class="bench"/><path d="${line('s')}" class="strat"/></svg>`;
+}
+function renderWeekly(){
+  const box=$('#weeklySection');
+  if(!weekly){box.innerHTML='<p class="empty-note">历史数据不足250个交易日，本次没有周度清单。</p>';return;}
+  const when=weekly.holding_from==='next'?`下周持有 · ${escapeHTML(weekly.rebalance_date)} 收盘选出`:`本周持有 · ${escapeHTML(weekly.rebalance_date)} 收盘选出`;
+  const cards=weekly.picks.map((p,i)=>`<button class="pick-card" data-code="${p.ticker}"><span class="pick-rank">${i+1}</span><b>${etfName(p.ticker)}</b><small>${p.ticker}${weekly.added.includes(p.ticker)?' · <em>新进</em>':''}</small><span class="pick-metric">${p.near_high===0?'处于250日新高':'距250日高 '+pct(p.near_high)}</span><span class="pick-sub">60日 ${pct(p.r60)}</span></button>`).join('');
+  const removed=weekly.removed.length?`换出：${weekly.removed.map(t=>`${etfName(t)} ${t}`).join('、')}`:(weekly.previous_date?'与上周相同，无换出':'');
+  const byCluster={};weekly.picks.forEach(p=>{const r=payload.rows.find(x=>x.ticker===p.ticker);if(r&&r.cluster)(byCluster[r.cluster]=byCluster[r.cluster]||[]).push(p.ticker);});
+  const conc=Object.entries(byCluster).filter(([,v])=>v.length>=2).map(([k,v])=>`${v.length} 只属于同类暴露「${escapeHTML(k)}」`);
+  const concNote=conc.length?`<p class="weekly-note warn">集中度提示：清单中 ${conc.join('，')}，近一年日收益相关性 ≥ 0.95，实际接近押注同一主题，回撤可能更大。</p>`:'';
+  const prov=weekly.provisional?`<p class="weekly-note">按今日收盘，下次调仓的前5：${weekly.provisional.map(p=>etfName(p.ticker)).join('、')}（周五收盘确定）</p>`:'';
+  const tr=weekly.track;
+  const track=tr?`<div class="track"><div class="track-head"><b>纸面跟踪</b><span>自 ${escapeHTML(weekly.track_start)} · ${tr.weeks} 周 · 已扣单边${(weekly.cost*100).toFixed(1)}%成本</span></div>${navChart(tr.nav)}<div class="track-legend"><span class="strat">周度清单 ${pct(tr.strategy.total)}</span><span class="bench">沪深300ETF ${pct(tr.benchmark.total)}</span><span class="ew">权益ETF等权 ${pct(tr.equal_weight.total)}</span>${tr.strategy.mdd!=null?`<span>清单最大回撤 ${pct(tr.strategy.mdd)}</span>`:''}</div></div>`
+    :`<div class="track"><div class="track-head"><b>纸面跟踪</b><span>自 ${escapeHTML(weekly.track_start)} 起按冻结规则记录，下一个交易日开始计入收益。</span></div></div>`;
+  box.innerHTML=`<div class="panel-head"><div><p class="section-kicker">WEEKLY PICKS · 250日高点轮动</p><h2>${when}</h2></div><span class="badge">前${weekly.top_n}名 · 等权 · 每周调仓</span></div>
+  <div class="pick-grid">${cards}</div>${concNote}<p class="weekly-note">${removed}</p>${prov}${track}
+  <p class="weekly-note muted">规则：每周最后一个交易日，在权益类ETF中选收盘价最接近过去250日最高收盘价的5只，下周等权持有。2022-12至2026-11回测年化约+21%（同期沪深300约+3%），但观察池为事后挑选，以纸面跟踪为准。仅为规则计算结果，不构成投资建议。</p>`;
+  box.querySelectorAll('.pick-card').forEach(b=>b.addEventListener('click',()=>openDrawer(state.data.find(x=>x.ticker===b.dataset.code))));
+}
+function renderIndexStrip(){
+  const box=$('#indexStrip'),list=(payload.regime&&payload.regime.indices)||[];
+  if(!list.length){box.remove();return;}
+  const trendName={up:'多头排列',down:'空头排列',range:'震荡'},trendCls={up:'sector-up',down:'sector-down',range:'sector-flat'};
+  const ma=x=>['50','120','250'].map(k=>`<span class="ma ${x.above[k]?'on':''}" title="收盘${x.above[k]?'高于':'低于'}${k}日均线">${k}</span>`).join('');
+  const cards=list.map(x=>`<button class="index-card" data-code="${x.ticker}"><div class="index-top"><b>${escapeHTML(x.name)}</b><span class="index-trend ${trendCls[x.trend]}">${trendName[x.trend]}</span></div><div class="index-near">${finite(x.near_high)?(x.near_high===0?'250日新高':'距高点 '+pct(x.near_high)):'—'}</div><div class="index-ma">均线 ${ma(x)}</div><div class="index-ret"><span class="${cls(x.r20)}">20日 ${pct(x.r20)}</span><span class="${cls(x.r60)}">60日 ${pct(x.r60)}</span></div></button>`).join('');
+  const nh=list.filter(x=>finite(x.near_high));
+  const far=nh.filter(x=>x.near_high<=-.15).length,close=nh.filter(x=>x.near_high>-.05).length;
+  const best=nh.slice().sort((a,b)=>b.near_high-a.near_high)[0];
+  const picks=(weekly&&weekly.picks||[]).filter(p=>finite(p.near_high));
+  const pickAvg=picks.length?picks.reduce((s,p)=>s+p.near_high,0)/picks.length:null;
+  const N=nh.length;
+  let lead=close===N?`${N}个宽基指数都在250日高点5%以内，普涨格局。`
+    :far===N?`${N}个宽基指数全部距250日高点15%以上，整体处于调整期。`
+    :close>=N-1&&far===0?`多数宽基接近高点（${close}/${N} 个在5%以内），整体偏强。`
+    :far>=N-1&&close===0?`多数宽基离高点较远（${far}/${N} 个距高点15%以上），整体偏弱。`
+    :close&&far?`宽基分化：${close} 个在高点5%以内，${far} 个距高点15%以上。`
+    :`宽基处于中间状态：${close} 个在高点5%以内，${far} 个距高点15%以上。`;
+  if(best)lead+=`宽基里离高点最近的是${escapeHTML(best.name)}（${best.near_high===0?'新高':pct(best.near_high)}）`;
+  if(pickAvg!=null)lead+=`；周度清单5只平均距高点 ${pct(pickAvg)}${pickAvg-(best?best.near_high:0)>.03?'，强势集中在宽基之外的板块':''}。`;else lead+='。';
+  box.innerHTML=`<p class="index-lead">${lead}</p><div class="index-grid">${cards}</div>`;
+  box.querySelectorAll('.index-card').forEach(b=>b.addEventListener('click',()=>{const r=state.data.find(x=>x.ticker===b.dataset.code);if(r)openDrawer(r);}));
 }
 init();

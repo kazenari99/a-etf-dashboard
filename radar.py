@@ -13,6 +13,7 @@ import urllib.parse
 import urllib.request
 import pandas as pd
 import model
+import strategy
 import trading_calendar
 from universe import ASSET_CLASS, CLUSTER_OF, CLUSTERS, CROSS_BORDER, ETF_GROUPS, UNIVERSE_VERSION
 
@@ -21,6 +22,8 @@ TZ=dt.timezone(dt.timedelta(hours=8))
 CACHE=ROOT/'data_cache/hithink_klines.json'
 BASE='https://fuyao.aicubes.cn'
 BENCHMARK='510300'
+# Broad indices shown as market context (not a timing signal: index-trend timing lost money in the backtest).
+INDEX_ETFS=[('510050','上证50'),('510300','沪深300'),('510500','中证500'),('512100','中证1000'),('159915','创业板'),('588000','科创50')]
 # Percentile scores are only meaningful when nearly the whole universe is ranked together.
 MIN_COVERAGE=0.9
 AUTH_API_CODES=(2001,2003)
@@ -70,7 +73,12 @@ def api_get(path,params,key,attempts=4):
         time.sleep(2**attempt+random.uniform(0,.5))
     raise RuntimeError('同花顺请求失败')
 
-def request_history(code,key,days=370,min_bars=121):
+def fetch_days():
+    """Calendar days of history: 250-session high lookback plus the whole paper track."""
+    return min(1820,max(560,(completed_cutoff()-dt.date.fromisoformat(strategy.TRACK_START)).days+560))
+
+def request_history(code,key,days=None,min_bars=121):
+    days=days or fetch_days()
     cutoff=completed_cutoff()
     start=dt.datetime.combine(cutoff-dt.timedelta(days=days),dt.time(),TZ)
     end=dt.datetime.combine(cutoff,dt.time(23,59,59),TZ)
@@ -116,7 +124,7 @@ def _num(v):
     v=float(v)
     return v if math.isfinite(v) else None
 
-def analyze(entries):
+def analyze_full(entries):
     """Rows for every universe ETF, the latest session and the market regime.
 
     The published score is model.PROD (V1 without the overheat penalty, with label
@@ -133,8 +141,9 @@ def analyze(entries):
             if not bars or bars[-1]['date']!=latest:panel['eligible'].loc[latest,t]=False
         prod=model.score_panel(panel,model.PROD,ASSET_CLASS,CLUSTERS)
         absolute=model.absolute_momentum(panel)
+        near=strategy.near_high(panel)
         state=model.regime(panel,ASSET_CLASS).loc[latest]
-        regime=dict(state=state['state'],breadth60=_num(state['breadth60']),bench_r120=_num(state['bench_r120']),hurdle=float(state['hurdle']))
+        regime=dict(state=state['state'],breadth60=_num(state['breadth60']),bench_r120=_num(state['bench_r120']),hurdle=float(state['hurdle']),indices=index_overview(panel,latest))
     else:
         regime=None
     rows=[]
@@ -156,11 +165,64 @@ def analyze(entries):
         amounts=pd.to_numeric(pd.Series([b.get('turnover') for b in bars[-20:]]),errors='coerce')
         r.update(close=last,ema20=ema20,sma50=g('sma50'),sma120=g('sma120'),atr14=atr,atr_pct=atr/last,dist_ema_atr=g('dist_ema_atr'),vol20_ann=g('vol20'),from_high120=g('from_high120'),high20_prev=high20,breakout_trigger=high20+.1*atr,pullback_low=ema20-.5*atr,pullback_high=ema20+.5*atr,stop_ref=stop,stop_pct=stop/last-1,adtv20=float(amounts.mean()) if len(amounts)==20 and amounts.notna().all() else None,trend_aligned=bool(panel['trend_aligned'].at[latest,code]),eligible=True,
                  setup=prod['setup'].at[latest,code],score=float(prod['score'].at[latest,code]),
-                 abs_momentum=bool(absolute.at[latest,code]),
+                 abs_momentum=bool(absolute.at[latest,code]),near_high250=_num(near.at[latest,code]),
                  history=[dict(date=b['date'],close=b['close']) for b in bars[-120:]])
         rows.append(r)
     rows.sort(key=lambda r:r['score'] if r['score'] is not None else -math.inf,reverse=True)
+    weekly=weekly_summary(panel,latest) if panel is not None else None
+    return rows,latest,regime,weekly
+
+def analyze(entries):
+    rows,latest,regime,_=analyze_full(entries)
     return rows,latest,regime
+
+def index_overview(panel,latest):
+    """Trend context for the broad-index ETFs: distance to the 250-session high and
+    position versus the 50/120/250-session averages."""
+    close=panel['close'];near=strategy.near_high(panel);sma250=close.rolling(250,min_periods=250).mean()
+    out=[]
+    for code,name in INDEX_ETFS:
+        if code not in close or pd.isna(close.at[latest,code]):continue
+        c=float(close.at[latest,code])
+        ma={k:_num(v) for k,v in (('50',panel['sma50'].at[latest,code]),('120',panel['sma120'].at[latest,code]),('250',sma250.at[latest,code]))}
+        above={k:(v is not None and c>v) for k,v in ma.items()}
+        if all(v is not None for v in ma.values()) and c>ma['50']>ma['120'] and c>ma['250']:trend='up'
+        elif all(v is not None for v in ma.values()) and c<ma['50']<ma['120'] and c<ma['250']:trend='down'
+        else:trend='range'
+        out.append(dict(ticker=code,name=name,near_high=_num(near.at[latest,code]),above=above,trend=trend,
+                        r20=_num(panel['r20'].at[latest,code]),r60=_num(panel['r60'].at[latest,code])))
+    return out
+
+def weekly_summary(panel,latest):
+    """Current/previous weekly picks and the out-of-sample paper track (see strategy.py)."""
+    cal=list(panel['close'].index)
+    ends=strategy.week_ends(cal)
+    nh=strategy.near_high(panel)
+    if nh.loc[latest].notna().sum()==0:return None
+    is_end=latest in ends
+    past=[d for d in ends if d<latest]
+    reb=latest if is_end else (past[-1] if past else None)
+    if reb is None:return None
+    prev=[d for d in ends if d<reb]
+    def entry(code,near,r60):return dict(ticker=code,near_high=near,r60=r60 if math.isfinite(r60) else None)
+    current=[entry(*x) for x in strategy.ranking(panel,ASSET_CLASS,reb)[:strategy.TOP_N]]
+    previous=strategy.picks(panel,ASSET_CLASS,prev[-1]) if prev else []
+    cur=[x['ticker'] for x in current]
+    out=dict(rule=strategy.RULE_VERSION,top_n=strategy.TOP_N,lookback=strategy.LOOKBACK,cost=strategy.COST,
+             rebalance_date=reb,holding_from='next' if is_end else 'this',picks=current,previous_date=prev[-1] if prev else None,
+             added=[c for c in cur if c not in previous],removed=[c for c in previous if c not in cur],
+             provisional=None if is_end else [entry(*x) for x in strategy.ranking(panel,ASSET_CLASS,latest)[:strategy.TOP_N]],
+             track_start=strategy.TRACK_START)
+    sim=strategy.simulate(panel,ASSET_CLASS,strategy.TRACK_START)
+    if len(sim['returns']):
+        navs=pd.DataFrame({'s':(1+sim['returns']).cumprod(),'b':(1+sim['benchmark']).cumprod(),'e':(1+sim['equal_weight']).cumprod()})
+        out['track']=dict(days=len(navs),weeks=len(sim['holdings']),strategy=strategy.stats(sim['returns']),benchmark=strategy.stats(sim['benchmark']),
+                          equal_weight=strategy.stats(sim['equal_weight']),
+                          nav=[dict(date=d,s=round(r.s,5),b=round(r.b,5),e=round(r.e,5)) for d,r in navs.iterrows()],
+                          holdings=[dict(date=d,picks=c) for d,c in sim['holdings'][-12:]])
+    else:
+        out['track']=None
+    return out
 
 def metrics(entries):
     rows,latest,_=analyze(entries)
@@ -244,9 +306,10 @@ def build(offline=False,render=False):
     if render:
         missing=[c for items in ETF_GROUPS.values() for c,_ in items if not cache.get(c,{}).get('rows')]
         if missing:raise RuntimeError(f'缓存缺少 {len(missing)} 只观察池ETF，无法离线重绘，请联网运行。')
+        if len(cache.get(BENCHMARK,{}).get('rows',[]))<strategy.LOOKBACK+10:raise RuntimeError('缓存历史不足250个交易日，无法计算周度清单，请联网运行。')
         payload=json.loads((ROOT/'reports/etf_data.json').read_text())
         previous=dict(payload)
-        payload['rows'],payload['asof'],payload['regime']=analyze(cache)
+        payload['rows'],payload['asof'],payload['regime'],payload['weekly']=analyze_full(cache)
         check_coverage(payload['rows'])
         payload['universe_version']=UNIVERSE_VERSION
         attach_comparison(payload,previous)
@@ -275,11 +338,11 @@ def build(offline=False,render=False):
             except AuthError:raise
             except Exception as exc:errors.append(f'{code} 净值：{type(exc).__name__}: {exc}；溢价不显示。')
             time.sleep(.4)
-    rows,latest,regime=analyze(entries)
+    rows,latest,regime,weekly=analyze_full(entries)
     check_coverage(rows)
     now=dt.datetime.now(TZ)
     if not trading_calendar.known(now.year):errors.append(f'trading_calendar.py 未收录{now.year}年休市安排，仅按工作日判断截止日；交易所公布后请补充。')
-    payload=dict(rows=rows,asof=latest,generated=now.isoformat(timespec='seconds'),errors=errors,offline=offline,provider='同花顺金融API',benchmark='510300',model=model.PROD.name,regime=regime,universe_version=UNIVERSE_VERSION,requested_cutoff=completed_cutoff(now).isoformat())
+    payload=dict(rows=rows,asof=latest,generated=now.isoformat(timespec='seconds'),errors=errors,offline=offline,provider='同花顺金融API',benchmark='510300',model=model.PROD.name,regime=regime,weekly=weekly,universe_version=UNIVERSE_VERSION,requested_cutoff=completed_cutoff(now).isoformat())
     attach_comparison(payload, published_snapshot() if not offline else None)
     out=publish(payload)
     if not offline:
