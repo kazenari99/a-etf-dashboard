@@ -15,7 +15,7 @@ import pandas as pd
 import model
 import strategy
 import trading_calendar
-from universe import ASSET_CLASS, CLUSTER_OF, CLUSTERS, CROSS_BORDER, ETF_GROUPS, UNIVERSE_VERSION
+from universe import ADDED, ASSET_CLASS, CASH_ETF, CLUSTER_OF, CLUSTERS, CROSS_BORDER, ETF_GROUPS, MARKET, UNIVERSE_VERSION
 
 ROOT=Path(__file__).resolve().parent
 TZ=dt.timezone(dt.timedelta(hours=8))
@@ -139,18 +139,23 @@ def analyze_full(entries):
         for t,e in entries.items():
             bars=e.get('rows') or []
             if not bars or bars[-1]['date']!=latest:panel['eligible'].loc[latest,t]=False
+        cash=CASH_ETF[0]
+        # The money-market ETF only supplies the cash hurdle; it is never ranked or picked.
+        if cash in panel['eligible']:panel['eligible'][cash]=False
         prod=model.score_panel(panel,model.PROD,ASSET_CLASS,CLUSTERS)
-        absolute=model.absolute_momentum(panel)
+        absolute=model.absolute_momentum(panel,cash=cash)
         near=strategy.near_high(panel)
-        state=model.regime(panel,ASSET_CLASS).loc[latest]
-        regime=dict(state=state['state'],breadth60=_num(state['breadth60']),bench_r120=_num(state['bench_r120']),hurdle=float(state['hurdle']),indices=index_overview(panel,latest))
+        state=model.regime(panel,ASSET_CLASS,market=MARKET,cash=cash).loc[latest]
+        has_cash=cash in panel['r120'] and pd.notna(panel['r120'].at[latest,cash])
+        regime=dict(state=state['state'],breadth60=_num(state['breadth60']),bench_r120=_num(state['bench_r120']),hurdle=float(state['hurdle']),
+                    hurdle_source=f'{CASH_ETF[1]}（{cash}）120日收益' if has_cash else '年化1.5%固定门槛',indices=index_overview(panel,latest))
     else:
         regime=None
     rows=[]
     for group,code,name in universe:
         e=entries.get(code,{})
         bars=e.get('rows',[])
-        r=dict(ticker=code,name=name,group=group,asset_class=ASSET_CLASS.get(code,'equity'),cluster=CLUSTER_OF.get(code),date=bars[-1]['date'] if bars else None,source=e.get('source','同花顺金融API'),cached=e.get('cached',False),setup='Data unavailable',eligible=False,score=None)
+        r=dict(ticker=code,name=name,group=group,asset_class=ASSET_CLASS.get(code,'equity'),market=MARKET.get(code,'境内'),added=ADDED.get(code),cluster=CLUSTER_OF.get(code),date=bars[-1]['date'] if bars else None,source=e.get('source','同花顺金融API'),cached=e.get('cached',False),setup='Data unavailable',eligible=False,score=None)
         if code in CROSS_BORDER:
             r['premium']=premium(bars,e.get('nav'));r['nav_date']=(e.get('nav') or {}).get('date')
         if panel is None or code not in panel['eligible'] or not panel['eligible'].at[latest,code]:
@@ -164,9 +169,12 @@ def analyze_full(entries):
         high20=g('high20_prev')
         amounts=pd.to_numeric(pd.Series([b.get('turnover') for b in bars[-20:]]),errors='coerce')
         r.update(close=last,ema20=ema20,sma50=g('sma50'),sma120=g('sma120'),atr14=atr,atr_pct=atr/last,dist_ema_atr=g('dist_ema_atr'),vol20_ann=g('vol20'),from_high120=g('from_high120'),high20_prev=high20,breakout_trigger=high20+.1*atr,pullback_low=ema20-.5*atr,pullback_high=ema20+.5*atr,stop_ref=stop,stop_pct=stop/last-1,adtv20=float(amounts.mean()) if len(amounts)==20 and amounts.notna().all() else None,trend_aligned=bool(panel['trend_aligned'].at[latest,code]),eligible=True,
-                 setup=prod['setup'].at[latest,code],score=float(prod['score'].at[latest,code]),
+                 setup=prod['setup'].at[latest,code],score=_num(prod['score'].at[latest,code]),
                  abs_momentum=bool(absolute.at[latest,code]),near_high250=_num(near.at[latest,code]),
                  history=[dict(date=b['date'],close=b['close']) for b in bars[-120:]])
+        if r['eligible'] and r['asset_class']!='equity':
+            # Not ranked against equities: label by absolute momentum instead.
+            r['score']=None;r['setup']='Absolute up' if r['abs_momentum'] else 'Absolute down'
         rows.append(r)
     rows.sort(key=lambda r:r['score'] if r['score'] is not None else -math.inf,reverse=True)
     weekly=weekly_summary(panel,latest) if panel is not None else None
@@ -244,11 +252,10 @@ def attach_comparison(payload, previous):
         return
     if any(baseline.get(k) != payload.get(k) for k in ('model', 'provider', 'benchmark', 'universe_version')):
         return
-    old = {r['ticker']: r for r in baseline['rows'] if r.get('eligible')}
-    new = {r['ticker']: r for r in payload['rows'] if r.get('eligible')}
+    scored = lambda r: r.get('eligible') and isinstance(r.get('score'), (int, float)) and math.isfinite(r['score'])
+    old = {r['ticker']: r for r in baseline['rows'] if scored(r)}
+    new = {r['ticker']: r for r in payload['rows'] if scored(r)}
     if not old or old.keys() != new.keys() or any(r.get('cached') for r in [*old.values(), *new.values()]):
-        return
-    if any(not isinstance(r.get('score'), (int,float)) or not math.isfinite(r['score']) for r in [*old.values(), *new.values()]):
         return
     def ranks(rows):
         return {t: 1 + sum(r['score'] > row['score'] for r in rows.values()) for t, row in rows.items()}
@@ -284,6 +291,16 @@ def published_snapshot():
         return None
 
 
+def local_snapshot():
+    """Last published payload restored from the Actions cache (reports/etf_data.json)."""
+    try:return json.loads((ROOT/'reports/etf_data.json').read_text())
+    except Exception:return None
+
+def previous_snapshot():
+    """Newest of the cached and the live published payload; either source may be missing."""
+    snaps=[x for x in (local_snapshot(),published_snapshot()) if isinstance(x,dict) and x.get('asof')]
+    return max(snaps,key=lambda x:(x['asof'],x.get('generated',''))) if snaps else None
+
 def publish(payload):
     out=ROOT/'reports';out.mkdir(exist_ok=True)
     encoded=json.dumps(payload,ensure_ascii=False,allow_nan=False)
@@ -315,7 +332,7 @@ def build(offline=False,render=False):
         attach_comparison(payload,previous)
         publish(payload);return
     entries={};errors=[];key=None if offline else api_key()
-    tasks=[c for items in ETF_GROUPS.values() for c,_ in items]
+    tasks=[c for items in ETF_GROUPS.values() for c,_ in items]+[CASH_ETF[0]]
     for i,code in enumerate(tasks,1):
         old=cache.get(code,{})
         entry=dict(old,cached=True) if old.get('rows') else dict(rows=[],source='同花顺金融API',cached=False)
@@ -343,7 +360,7 @@ def build(offline=False,render=False):
     now=dt.datetime.now(TZ)
     if not trading_calendar.known(now.year):errors.append(f'trading_calendar.py 未收录{now.year}年休市安排，仅按工作日判断截止日；交易所公布后请补充。')
     payload=dict(rows=rows,asof=latest,generated=now.isoformat(timespec='seconds'),errors=errors,offline=offline,provider='同花顺金融API',benchmark='510300',model=model.PROD.name,regime=regime,weekly=weekly,universe_version=UNIVERSE_VERSION,requested_cutoff=completed_cutoff(now).isoformat())
-    attach_comparison(payload, published_snapshot() if not offline else None)
+    attach_comparison(payload, previous_snapshot() if not offline else None)
     out=publish(payload)
     if not offline:
         CACHE.parent.mkdir(exist_ok=True);tmp=CACHE.with_suffix('.tmp');tmp.write_text(json.dumps(entries,ensure_ascii=False));tmp.replace(CACHE)

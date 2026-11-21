@@ -47,7 +47,9 @@ class ModelConfig:
 V1 = ModelConfig()
 V2 = V1.variant('a-momentum-v2-candidate', skip_recent=5, risk_adjust=True, overheat='linear',
                 rank_scope='equity', dedupe=True, min_adtv=2e7, smooth=3, hysteresis=True)
-PROD = V1.variant('a-momentum-v1.1', overheat_penalty=0.0, hysteresis=True)
+# v1.2: percentiles are computed among equity ETFs only; bonds, commodities and convertibles
+# get no relative score (the page shows their absolute momentum instead).
+PROD = V1.variant('a-momentum-v1.2', overheat_penalty=0.0, hysteresis=True, rank_scope='equity')
 CASH_RATE = 0.015  # annual hurdle for absolute momentum (roughly short-term deposit/repo yield)
 
 
@@ -214,15 +216,27 @@ def score_panel(panel, cfg, asset_class=None, clusters=None):
     return dict(score=score, setup=_setups(panel, rs60, cfg.hysteresis), ranked=ranked, rs60=rs60)
 
 
-def regime(panel, asset_class, cash_rate=CASH_RATE):
+def cash_hurdle(panel, cash=None, cash_rate=CASH_RATE):
+    """120-day cash return per date: the money-market ETF's own return where available,
+    otherwise the fixed annual rate."""
+    fixed = (1 + cash_rate) ** (120 / 252) - 1
+    idx = panel['close'].index
+    if cash and cash in panel['r120'].columns:
+        return panel['r120'][cash].reindex(idx).fillna(fixed)
+    return pd.Series(fixed, index=idx)
+
+
+def regime(panel, asset_class, cash_rate=CASH_RATE, market=None, cash=None):
     """Dual-momentum style market state per date: risk_on / neutral / risk_off.
 
     Absolute momentum: benchmark 120-day return against the cash hurdle and its 120-day
-    average; breadth: share of eligible equity ETFs with a positive 60-day return.
+    average; breadth: share of eligible equity ETFs with a positive 60-day return
+    (domestic equity only when `market` is given).
     """
     bench = panel['benchmark']
-    hurdle = (1 + cash_rate) ** (120 / 252) - 1
-    equity = [t for t in panel['eligible'].columns if asset_class.get(t, 'equity') == 'equity']
+    hurdle = cash_hurdle(panel, cash, cash_rate)
+    equity = [t for t in panel['eligible'].columns if asset_class.get(t, 'equity') == 'equity'
+              and (market is None or market.get(t, '境内') == '境内')]
     elig = panel['eligible'][equity]
     breadth = (panel['r60'][equity] > 0).where(elig).sum(axis=1) / elig.sum(axis=1).replace(0, np.nan)
     above = panel['close'][bench] > panel['sma120'][bench]
@@ -233,6 +247,6 @@ def regime(panel, asset_class, cash_rate=CASH_RATE):
                          'hurdle': hurdle}, index=panel['eligible'].index)
 
 
-def absolute_momentum(panel, cash_rate=CASH_RATE):
-    hurdle = (1 + cash_rate) ** (120 / 252) - 1
-    return (panel['r120'] > hurdle) & (panel['close'] > panel['sma120'])
+def absolute_momentum(panel, cash_rate=CASH_RATE, cash=None):
+    hurdle = cash_hurdle(panel, cash, cash_rate)
+    return panel['r120'].gt(hurdle, axis=0) & (panel['close'] > panel['sma120'])

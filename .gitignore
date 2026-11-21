@@ -14,3 +14,9 @@ config/hithink_api_key.txt
 
 data_cache/backtest_klines.json
 reports/backtest_synthetic.*
+
+# Generated on every run; published from the Actions workspace, not from git.
+index.html
+reports/etf_dashboard.html
+reports/etf_data.json
+archive/

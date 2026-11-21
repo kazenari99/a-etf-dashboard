@@ -1,7 +1,7 @@
 """Production observation universe. Display names are concise, not legal fund names.
 Primary-source checks and scope: docs/UNIVERSE.md.
 """
-UNIVERSE_VERSION = '2026-11-expanded-v2'
+UNIVERSE_VERSION = '2026-11-v3'
 ETF_GROUPS = {
     '宽基': [
         ('510300', '沪深300ETF'),
@@ -14,9 +14,9 @@ ETF_GROUPS = {
     ],
     '科技成长': [
         ('515880', '通信ETF'),
-        ('159995', '芯片ETF'),
-        ('512760', '芯片ETF'),
-        ('159516', '半导体设备ETF'),
+        ('159995', '芯片ETF华夏'),
+        ('512760', '芯片ETF国泰'),
+        ('159516', '半导体设备ETF国泰'),
         ('588200', '科创芯片ETF'),
         ('159819', '人工智能ETF'),
         ('159530', '机器人ETF'),
@@ -34,6 +34,7 @@ ETF_GROUPS = {
         ('516160', '新能源ETF'),
         ('159326', '电网设备ETF'),
         ('159840', '锂电池ETF'),
+        ('512580', '环保ETF'),
     ],
     '工业制造': [
         ('516110', '汽车ETF'),
@@ -45,9 +46,8 @@ ETF_GROUPS = {
     '农业': [
         ('159825', '农业ETF'),
     ],
-    '公用事业/环保': [
+    '公用事业': [
         ('159611', '电力ETF'),
-        ('512580', '环保ETF'),
     ],
     '交通运输': [
         ('561320', '交运ETF'),
@@ -78,18 +78,23 @@ ETF_GROUPS = {
     ],
     '医药医疗': [
         ('512010', '医药ETF'),
-        ('515120', '创新药ETF'),
-        ('159992', '创新药ETF'),
+        ('515120', '创新药ETF广发'),
+        ('159992', '创新药ETF银华'),
         ('512170', '医疗ETF'),
     ],
-    '港股/跨境': [
+    '港股': [
         ('513130', '恒生科技ETF'),
         ('513330', '恒生互联网ETF'),
         ('159605', '中概互联ETF'),
         ('513060', '恒生医疗ETF'),
+        ('513120', '港股创新药ETF'),
+        ('513910', '港股央企红利ETF'),
+    ],
+    '海外': [
         ('513100', '纳指ETF'),
         ('513500', '标普500ETF'),
         ('159866', '日经ETF'),
+        ('513310', '中韩半导体ETF'),
     ],
     '红利策略': [
         ('510880', '红利ETF'),
@@ -104,15 +109,33 @@ ETF_GROUPS = {
     '债券': [
         ('511010', '国债ETF'),
         ('511260', '十年国债ETF'),
+        ('511090', '30年国债ETF'),
+    ],
+    '可转债': [
+        ('511380', '可转债ETF'),
     ],
 }
 
+# Money-market ETF used as the cash benchmark (hurdle for absolute momentum and the
+# regime). Fetched with the universe but not listed or ranked.
+CASH_ETF = ('511880', '银华日利ETF')
+
+# Members added after the paper track started only become weekly-pick candidates from
+# this session on, so the track stays out-of-sample (strategy.candidates).
+ADDED = {code: '2026-11-23' for code in ('513120', '513910', '513310', '511090', '511380')}
+
 # Asset class drives the v2 split between relative ranking (equity) and absolute momentum.
-ASSET_CLASS = {code: {'商品': 'commodity', '债券': 'bond'}.get(group, 'equity')
+ASSET_CLASS = {code: {'商品': 'commodity', '债券': 'bond', '可转债': 'convertible'}.get(group, 'equity')
                for group, items in ETF_GROUPS.items() for code, _ in items}
+ASSET_CLASS[CASH_ETF[0]] = 'cash'
+
+# Where the underlying trades. A-share breadth statistics use 境内 equity only.
+MARKET = {code: {'港股': '港股', '海外': '海外'}.get(group, '境内')
+          for group, items in ETF_GROUPS.items() for code, _ in items}
+MARKET[CASH_ETF[0]] = '境内'
 
 # Cross-border ETFs trade at a premium/discount to NAV; the page shows it next to momentum.
-CROSS_BORDER = [code for code, _ in ETF_GROUPS['港股/跨境']]
+CROSS_BORDER = [code for g in ('港股', '海外') for code, _ in ETF_GROUPS[g]]
 
 # Overlapping exposures: pairs with daily-return correlation >= 0.95 over the 250 sessions
 # to 2026-11-20 (backtest.py section 6). Shown in the detail drawer; used by the backtest's

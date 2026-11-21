@@ -18,6 +18,7 @@ import numpy as np
 import pandas as pd
 
 import trading_calendar
+from universe import ADDED
 
 LOOKBACK = 250
 TOP_N = 5
@@ -33,9 +34,17 @@ def near_high(panel):
     return close / close.rolling(LOOKBACK, min_periods=LOOKBACK).max() - 1
 
 
-def candidates(panel, asset_class):
+def candidates(panel, asset_class, added=None):
+    """Equity ETFs with enough turnover; members added later join from their ADDED date."""
     equity = np.array([asset_class.get(t, 'equity') == 'equity' for t in panel['close'].columns])
-    return panel['eligible'] & equity & (panel['adtv20'] >= MIN_ADTV)
+    ok = panel['eligible'] & equity & (panel['adtv20'] >= MIN_ADTV)
+    added = ADDED if added is None else added
+    if added:
+        dates = pd.Series(ok.index, index=ok.index)
+        for code, since in added.items():
+            if code in ok.columns:
+                ok[code] = ok[code] & (dates >= since)
+    return ok
 
 
 def week_ends(calendar, today_is_final=False):

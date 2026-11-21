@@ -1,7 +1,7 @@
 const state = { data: [], filtered: [], sortKey: 'score', sortDir: -1, selected: null, setup: 'all', group: 'all', query: '', watchOnly: false, favorites: [] };
 const $ = (s) => document.querySelector(s);
 const svgNS = 'http://www.w3.org/2000/svg';
-const setupNames = { 'Momentum':'动量成立', 'Strong / wait pullback':'加速强势', 'Pullback watch':'等待确认', 'Avoid / broken':'趋势破坏' };
+const setupNames = { 'Momentum':'动量成立', 'Strong / wait pullback':'加速强势', 'Pullback watch':'等待确认', 'Avoid / broken':'趋势破坏', 'Absolute up':'绝对动量成立', 'Absolute down':'绝对动量不成立' };
 
 // Chinese display labels describe each fund; not official legal names.
 const payload=JSON.parse(document.getElementById('dataset').textContent);
@@ -12,15 +12,17 @@ const pct=v=>finite(v)?`${v>=0?'+':''}${(v*100).toFixed(1)}%`:'—';
 const price=v=>finite(v)?v.toLocaleString('zh-CN',{minimumFractionDigits:3,maximumFractionDigits:3}):'—';
 const cls=v=>finite(v)?v>=0?'positive':'negative':'';
 const scoreText=v=>finite(v)?v.toFixed(1):'—';
-const statusClass=s=>(s==='Momentum'||s==='Strong / wait pullback')?'momentum':s==='Pullback watch'?'wait':'avoid';
+const statusClass=s=>(s==='Momentum'||s==='Strong / wait pullback')?'momentum':(s==='Pullback watch'||s==='Absolute up')?'wait':'avoid';
 const escapeHTML=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 setupNames['Data unavailable']='数据不足 / 日期不齐';
 let previousFocus=null;
 
 function renderKPIs(){
-  const d=state.data.filter(x=>x.eligible), n=d.length;
+  // Breadth = domestic equity ETFs only (no bonds, commodities, HK or overseas).
+  const d=state.data.filter(x=>x.eligible&&x.asset_class==='equity'&&x.market==='境内'), n=d.length;
+  const complete=state.data.filter(x=>x.eligible).length;
   const cards=[
-    ['扫描范围',state.data.length,'只 ETF',`${n} 只满足完整窗口 · 同花顺日线`],
+    ['扫描范围',state.data.length,'只 ETF',`${complete} 只满足完整窗口 · 宽度按 A股权益 ${n} 只`],
     ['20日上涨',d.filter(x=>x.r20>0).length,`/ ${n}`,`${Math.round(d.filter(x=>x.r20>0).length/Math.max(n,1)*100)}% 短线宽度`],
     ['60日上涨',d.filter(x=>x.r60>0).length,`/ ${n}`,`${Math.round(d.filter(x=>x.r60>0).length/Math.max(n,1)*100)}% 中期宽度`],
     ['多头排列',d.filter(x=>x.trend_aligned===true).length,`/ ${n}`,'Close > 20EMA > 50MA > 120MA']
@@ -66,7 +68,7 @@ function renderScatter(){
   }
   const xlab=document.createElementNS(svgNS,'text');xlab.setAttribute('x',(m.l+W-m.r)/2);xlab.setAttribute('y',H-1);xlab.setAttribute('text-anchor','middle');xlab.setAttribute('class','axis-label');xlab.textContent='60日收益';svg.append(xlab);
   [[xp(0),m.t,xp(0),H-m.b],[m.l,yp(0),W-m.r,yp(0)]].forEach(coords=>{const line=document.createElementNS(svgNS,'line');['x1','y1','x2','y2'].forEach((a,i)=>line.setAttribute(a,coords[i]));line.setAttribute('class','zero-line');svg.append(line);});
-  const sorted=[...data].sort((a,b)=>a.adtv20-b.adtv20), labels=new Set([...data].sort((a,b)=>b.score-a.score).slice(0,W<500?4:10).map(x=>x.ticker));
+  const sorted=[...data].sort((a,b)=>a.adtv20-b.adtv20), labels=new Set([...data].filter(x=>finite(x.score)).sort((a,b)=>b.score-a.score).slice(0,W<500?4:10).map(x=>x.ticker));
   sorted.forEach(x=>{
     const t=Math.max(0,Math.min(1,(x.r120+.15)/.7)); const r=5+Math.max(0,Math.min(7,Math.log10(Math.max(x.adtv20||1e6,1e6)/1e6)*1.3));
     const dot=document.createElementNS(svgNS,'circle');dot.setAttribute('cx',xp(x.r60*100));dot.setAttribute('cy',yp(x.r20*100));dot.setAttribute('r',r);dot.setAttribute('fill',`hsl(${350+t*150} 70% 57%)`);dot.setAttribute('fill-opacity','.78');dot.setAttribute('stroke','#0d1420');dot.setAttribute('class','dot');dot.setAttribute('tabindex','0');
@@ -76,7 +78,7 @@ function renderScatter(){
 }
 
 function renderLeaders(){
-  const top=state.filtered.filter(x=>x.eligible).sort((a,b)=>b.score-a.score).slice(0,10),max=Math.max(...top.map(x=>x.score),1);
+  const top=state.filtered.filter(x=>x.eligible&&finite(x.score)).sort((a,b)=>b.score-a.score).slice(0,10),max=Math.max(...top.map(x=>x.score),1);
   $('#leaderList').innerHTML=top.map(x=>`<div class="leader" data-code="${x.ticker}"><span class="leader-identity"><span class="leader-code">${x.ticker}</span><span class="leader-name">${etfName(x.ticker)}</span><span class="table-chip ${statusClass(x.setup)}">${setupNames[x.setup]}</span></span><div class="leader-track"><div class="leader-fill" style="width:${x.score/max*100}%">${pct(x.r60)}</div></div><span class="leader-score">${scoreText(x.score)}</span></div>`).join('');
   document.querySelectorAll('.leader').forEach(el=>el.addEventListener('click',()=>openDrawer(state.data.find(x=>x.ticker===el.dataset.code))));
 }
@@ -118,7 +120,7 @@ function bind(){
 }
 
 function renderSectors(){
- const groups=[...new Set(state.data.map(x=>x.group))].map(group=>{const all=state.data.filter(x=>x.group===group),d=all.filter(x=>x.eligible),avg=k=>d.length?d.reduce((s,r)=>s+r[k],0)/d.length:null;return {group,count:d.length,total:all.length,score:avg('score'),returns:[20,60,120].map(n=>avg(`r${n}`)),aligned:d.filter(r=>r.trend_aligned).length};}).sort((a,b)=>(b.score??-Infinity)-(a.score??-Infinity));
+ const groups=[...new Set(state.data.map(x=>x.group))].map(group=>{const all=state.data.filter(x=>x.group===group),d=all.filter(x=>x.eligible),avg=k=>{const v=d.map(r=>r[k]).filter(finite);return v.length?v.reduce((s,x)=>s+x,0)/v.length:null;};return {group,count:d.length,total:all.length,score:avg('score'),returns:[20,60,120].map(n=>avg(`r${n}`)),aligned:d.filter(r=>r.trend_aligned).length};}).sort((a,b)=>(b.score??-Infinity)-(a.score??-Infinity));
  $('#sectorGrid').innerHTML='<div class="heat-row heat-head"><span>板块 / 动量分</span><span>20日</span><span>60日</span><span>120日</span><span>多头 / 有效</span></div>'+groups.map(g=>`<button type="button" class="heat-row" data-group="${escapeHTML(g.group)}"><span><b>${escapeHTML(g.group)}</b><small>评分 ${scoreText(g.score)} · ${g.count}/${g.total} 有效</small></span>${g.returns.map(v=>`<span class="heat-cell ${cls(v)}">${pct(v)}</span>`).join('')}<span>${g.aligned}/${g.count}<small>${g.count?Math.round(g.aligned/g.count*100):0}% 多头</small></span></button>`).join('');
  document.querySelectorAll('[data-group]').forEach(b=>b.addEventListener('click',()=>{state.group=b.dataset.group;syncControls();applyFilters();$('.table-section').scrollIntoView({behavior:'smooth'});}));
 }
@@ -164,7 +166,7 @@ function init(){
  }catch(err){document.querySelector('main').innerHTML=`<div class="error-state"><h2>数据载入失败</h2><p>${escapeHTML(err.message)}</p></div>`;}
 }
 
-const assetNames={equity:'权益',commodity:'商品',bond:'债券'};
+const assetNames={equity:'权益',commodity:'商品',bond:'债券',convertible:'可转债'};
 const clusterMembers=Object.fromEntries([...new Set(payload.rows.map(r=>r.cluster).filter(Boolean))].map(c=>[c,payload.rows.filter(r=>r.cluster===c).map(r=>r.ticker)]));
 function premiumChip(x){
   if(!finite(x.premium)||Math.abs(x.premium)<.01)return '';
@@ -178,15 +180,17 @@ function premiumDetail(x){
 }
 function exposureDetail(x){
   const lines=[];
+  if(x.market&&x.market!=='境内')lines.push(`${x.market==='港股'?'港股':'海外'}资产：场内价格以人民币计价，含汇率与溢价变化；不计入A股市场宽度。`);
+  if(x.added)lines.push(`${escapeHTML(x.added)} 起加入观察池，从这一天起才参与周度清单，纸面跟踪不会回溯计入。`);
   if(x.cluster)lines.push(`同类暴露「${escapeHTML(x.cluster)}」：${clusterMembers[x.cluster].filter(t=>t!==x.ticker).map(t=>`${etfName(t)} ${t}`).join('、')}。近一年日收益相关性 ≥ 0.95，排名靠前时可能代表同一主题。`);
-  if(x.eligible&&x.asset_class!=='equity')lines.push(`${assetNames[x.asset_class]}类资产与股票ETF一起做百分位排名，排名仅表示相对强弱；绝对动量 <b>${x.abs_momentum?'成立':'不成立'}</b>（120日收益高于现金门槛且收盘在120日均线上方）。`);
+  if(x.eligible&&x.asset_class!=='equity')lines.push(`${assetNames[x.asset_class]}类资产不与股票ETF一起排名，因此没有综合评分；绝对动量 <b>${x.abs_momentum?'成立':'不成立'}</b>（120日收益高于货币ETF同期收益，且收盘在120日均线上方）。`);
   return lines.length?`<div class="shadow-panel"><h3>暴露与资产类别</h3>${lines.map(l=>`<p>${l}</p>`).join('')}</div>`:'';
 }
 function renderRegimeState(){
   const r=payload.regime;if(!r)return;
   const map={risk_on:['偏进攻','sector-up'],neutral:['中性','sector-flat'],risk_off:['偏防守','sector-down']};
   const [label,klass]=map[r.state]||['—',''];
-  $('#regimeState').innerHTML=`<span class="regime-chip ${r.state}">双动量状态 · ${label}</span><small>沪深300 120日 ${pct(r.bench_r120)} vs 现金门槛 ${pct(r.hurdle)} · 权益60日上涨占比 ${finite(r.breadth60)?Math.round(r.breadth60*100)+'%':'—'}</small><small class="regime-caveat">仅作背景：2022–2026回测中，按大盘趋势进出（如跌破200日线换国债）跑输一直持有沪深300，因此不作为买卖信号。</small>`;
+  $('#regimeState').innerHTML=`<span class="regime-chip ${r.state}">双动量状态 · ${label}</span><small>沪深300 120日 ${pct(r.bench_r120)} vs 现金 ${pct(r.hurdle)}（${escapeHTML(r.hurdle_source||'')}）· A股权益60日上涨占比 ${finite(r.breadth60)?Math.round(r.breadth60*100)+'%':'—'}</small><small class="regime-caveat">仅作背景：2022–2026回测中，按大盘趋势进出（如跌破200日线换国债）跑输一直持有沪深300，因此不作为买卖信号。</small>`;
   renderIndexStrip();
 }
 function trapFocus(e){
