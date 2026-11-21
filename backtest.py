@@ -21,6 +21,7 @@ import numpy as np
 import pandas as pd
 
 import model
+import strategy
 import radar
 from universe import ASSET_CLASS, CLUSTERS, ETF_GROUPS, UNIVERSE_VERSION
 
@@ -202,12 +203,59 @@ def evaluate(entries, asset_class=ASSET_CLASS, clusters=CLUSTERS, benchmark=rada
     pairs = sorted(((a, b, float(corr.at[a, b])) for i, a in enumerate(corr.columns) for b in corr.columns[i + 1:]
                     if pd.notna(corr.at[a, b]) and corr.at[a, b] >= .9), key=lambda x: -x[2])
     cal = panel['calendar']
+    rule = rule_backtest(panel, asset_class)
     valid = common.sum(axis=1) >= MIN_NAMES
     span = (valid[valid].index[0], valid[valid].index[-1]) if valid.any() else (None, None)
     return dict(generated=dt.datetime.now(radar.TZ).isoformat(timespec='seconds'), calendar=[cal[0], cal[-1]] if cal else None,
                 eval_span=list(span), names=int(common.any().sum()), eval_min_adtv=EVAL_MIN_ADTV, top_n=TOP_N,
                 regime_share={k: float(v) for k, v in regime[valid].value_counts(normalize=True).items()},
-                configs=results, high_corr_pairs=pairs[:30])
+                configs=results, high_corr_pairs=pairs[:30], rule=rule)
+
+
+def rule_backtest(panel, asset_class, start=None, random_runs=200, seed=0):
+    """Portfolio-level test of strategy.py's weekly rule against the benchmark, the
+    equal-weight candidate set and random 5-name picks from the same candidates."""
+    cal = panel['calendar']
+    nh = strategy.near_high(panel)
+    have = nh.notna().sum(axis=1)
+    first = next((d for d in cal if have.get(d, 0) >= MIN_NAMES), None)
+    start = start or first
+    if start is None:
+        return None
+    sim = strategy.simulate(panel, asset_class, start)
+    if len(sim['returns']) < 60:
+        return None
+    years = pd.Series(pd.to_datetime(sim['returns'].index).year, index=sim['returns'].index)
+    by = lambda r: {int(y): float(v) for y, v in ((1 + r).groupby(years).prod() - 1).items()}
+    # Random picks: same candidates, same schedule and costs.
+    rng = np.random.default_rng(seed)
+    cand = strategy.candidates(panel, asset_class) & nh.notna()
+    ret = panel['close'].pct_change().fillna(0.0).to_numpy()
+    sched = set(strategy.week_ends(cal))
+    idx = [i for i, d in enumerate(cal) if d >= sim['returns'].index[0] or (i + 1 < len(cal) and cal[i + 1] == sim['returns'].index[0])]
+    i0, cm = idx[0], cand.to_numpy()
+    rand = []
+    for _ in range(random_runs):
+        w = np.zeros(ret.shape[1]); out = []
+        for i in range(i0, len(cal) - 1):
+            c = 0.0
+            if cal[i] in sched:
+                pool = np.nonzero(cm[i])[0]
+                new = np.zeros_like(w)
+                if len(pool):
+                    new[rng.choice(pool, size=min(strategy.TOP_N, len(pool)), replace=False)] = 1 / min(strategy.TOP_N, len(pool))
+                c = np.abs(new - w).sum() * strategy.COST; w = new
+            out.append((w * ret[i + 1]).sum() - c)
+            g = w * (1 + ret[i + 1]); w = g / g.sum() if g.sum() > 0 else g
+        rand.append(strategy.stats(pd.Series(out))['cagr'])
+    rand = np.array([r for r in rand if r is not None])
+    st = strategy.stats(sim['returns'])
+    return dict(start=sim['returns'].index[0], end=sim['returns'].index[-1], rule=strategy.RULE_VERSION, cost=strategy.COST,
+                strategy=st, benchmark=strategy.stats(sim['benchmark']), equal_weight=strategy.stats(sim['equal_weight']),
+                turnover=float(sim['turnover'] / (len(sim['returns']) / 252)),
+                by_year=dict(strategy=by(sim['returns']), benchmark=by(sim['benchmark']), equal_weight=by(sim['equal_weight'])),
+                random=dict(runs=int(len(rand)), median=float(np.median(rand)), p95=float(np.percentile(rand, 95)),
+                            beaten=float((rand < st['cagr']).mean())) if len(rand) and st['cagr'] is not None else None)
 
 
 # ---------------------------------------------------------------- report
@@ -261,7 +309,21 @@ def report(res, label='同花顺前复权日线'):
     for c in res['configs']:
         s = c['setups']
         L.append(f'| {c["name"]} | ' + ' | '.join(f'{_p(s[k]["excess20"])}（{s[k]["share"]:.0%}）' for k in ('Momentum', 'Strong / wait pullback', 'Pullback watch', 'Avoid / broken')) + f' | {c["strong_entries_per_day"]:.2f} |')
-    L += ['', '## 6. 近250日日收益相关性 ≥ 0.90 的组合（用于核对 universe.CLUSTERS）', '']
+    rule = res.get('rule')
+    if rule:
+        L += ['', f'## 6. 周度清单规则（{rule["rule"]}，{rule["start"]} ~ {rule["end"]}，单边成本{rule["cost"]:.1%}）', '',
+              '| | 年化 | 年化波动 | 夏普 | 最大回撤 |', '|---|---|---|---|---|']
+        for name, k in (('周度清单（距250日高点前5）', 'strategy'), ('沪深300ETF', 'benchmark'), ('权益ETF等权', 'equal_weight')):
+            x = rule[k]
+            L.append(f'| {name} | {_p(x["cagr"], 1)} | {_p(x["vol"], 1).lstrip("+")} | {_f(x["sharpe"], 2)} | {_p(x["mdd"], 1)} |')
+        ys = sorted(rule['by_year']['strategy'])
+        L += ['', '| 年份 | ' + ' | '.join(map(str, ys)) + ' |', '|---|' + '---|' * len(ys)]
+        for name, k in (('周度清单', 'strategy'), ('沪深300ETF', 'benchmark'), ('等权', 'equal_weight')):
+            L.append(f'| {name} | ' + ' | '.join(_p(rule['by_year'][k].get(y), 1) for y in ys) + ' |')
+        rnd = rule.get('random')
+        L += ['', f'- 年换手约 {rule["turnover"]:.0f} 倍。'] + ([f'- 同一候选池随机选5只、同样每周调仓和成本，{rnd["runs"]} 次模拟：年化中位数 {_p(rnd["median"], 1)}，95分位 {_p(rnd["p95"], 1)}；本规则超过 {rnd["beaten"]:.0%} 的随机组合。随机组合几乎每周全换，成本拖累比本规则大，这一项只作参考。'] if rnd else [])
+        L += ['- 规则在 2026-11-21 根据本数据选定，样本内结果偏乐观；以页面上自 2026-11-20 起的纸面跟踪为准。']
+    L += ['', '## 7. 近250日日收益相关性 ≥ 0.90 的组合（用于核对 universe.CLUSTERS）', '']
     L += [f'- {a} / {b}：{r:.3f}' for a, b, r in res['high_corr_pairs']] or ['- 无']
     L += ['', '## 怎么读', '',
           '- **Rank IC**：当日评分排名与之后20日收益排名的相关系数。A股行业动量通常在 0.02–0.08 之间，t值 > 2 才算显著。',
