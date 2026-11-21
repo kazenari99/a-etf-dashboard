@@ -25,7 +25,6 @@
       <div class="data-quality" id="dataQuality" role="status"></div>
       <section class="weekly-section panel" id="weeklySection" aria-label="周度清单"></section>
       <section class="kpi-grid" id="kpiGrid" aria-label="市场宽度概览"></section>
-
       <section class="market-strip">
         <div>
           <p class="section-kicker">MARKET · 大盘概览</p>
@@ -36,11 +35,6 @@
         <div class="breadth" id="breadthBars" aria-label="上涨比例"></div>
       </section>
       <section class="index-strip" id="indexStrip" aria-label="宽基指数趋势"></section>
-
-      <section class="sector-section panel">
-        <div class="panel-head"><div><p class="section-kicker">SECTOR BREADTH</p><h2>板块动量与趋势宽度</h2></div><span class="badge">按资产组 · ETF等权 · 绿涨红跌</span></div>
-        <p class="chart-note">股票板块、红利策略、商品与债券分别展示；ETF等权，同主题多产品可能影响组内均值，并非行业指数收益。</p><div class="sector-grid" id="sectorGrid"></div>
-      </section>
       <section class="changes-section panel"><div class="panel-head"><div><p class="section-kicker">SINCE LAST SNAPSHOT</p><h2>每日变化</h2></div><span id="comparisonDate" class="badge"></span></div><div id="dailyChanges" class="changes-grid"></div></section>
       <section class="control-row" aria-label="筛选工具">
         <label class="search-box">
@@ -87,27 +81,15 @@
           <div class="chart-wrap" id="scatterChart" role="img" aria-label="ETF 20日和60日收益散点图"></div>
           <p class="chart-note">右上角代表短中期同步上涨；圆点越大，20日平均成交额越高。点击圆点查看交易参数。</p>
         </article>
-
-        <article class="panel leader-panel">
-          <div class="panel-head">
-            <div><p class="section-kicker">LEADERS</p><h2>综合动量排名</h2><p class="chart-note">分数衡量相对强弱，趋势状态单独判断。</p></div>
-            <span class="badge">20/60/120D</span>
-          </div>
-          <div class="leader-list" id="leaderList"></div>
-        </article>
       </section>
-
-      <section class="opportunity-section">
-        <div class="section-title-row">
-          <div><p class="section-kicker">TRADE SETUPS</p><h2>动量观察名单</h2></div>
-          <p>满足模型条件的观察样本；评分不是买入信号。</p>
-        </div>
-        <div class="opportunity-grid" id="opportunityGrid"></div>
+      <section class="sector-section panel">
+        <div class="panel-head"><div><p class="section-kicker">SECTOR BREADTH</p><h2>板块动量与趋势宽度</h2></div><span class="badge">按资产组 · ETF等权 · 绿涨红跌</span></div>
+        <p class="chart-note">默认显示评分最高5组、最低3组和不评分的防守资产组，可展开全部；ETF等权，同主题多产品可能影响组内均值，并非行业指数收益。</p><div class="sector-grid" id="sectorGrid"></div>
       </section>
 
       <section class="method-panel">
         <details><summary>评分方法与数据说明 <span>A股版 v1.2 · 附回测结论</span></summary>
-          <div class="method-grid"><div><h3>周度清单（主规则）</h3><p>每周最后一个交易日收盘后，在权益类ETF（含港股/跨境，不含债券与商品，20日均成交额≥2000万元）中，选收盘价距过去250个交易日最高收盘价最近的5只，下周等权持有；并列时按60日收益排序。2022-12至2026-11回测（单边成本0.1%）：年化约+21%、最大回撤约−22%，同期沪深300约+3%。观察池为事后挑选，前后共试过约30种做法，所以从2026-11-20起按冻结规则做纸面跟踪，以跟踪结果为准。</p></div>
+          <div class="method-grid"><div><h3>周度清单（主规则 v2）</h3><p>每周最后一个交易日收盘后，在权益类ETF（A股、港股、海外，20日均成交额≥2000万元）中，按“5个交易日前的收盘价相对当时250日最高收盘价的距离”选前5只，并列按60日收益；下一交易日开盘等权调仓。跳过最近5天，是因为不跳过的原规则大部分回测收益来自创新高后的第一个交易日，收盘后才能下单的投资者拿不到（次日开盘成交年化约+10%，信号晚一天约+5%）。v2 在次日开盘成交、单边0.1%成本下，2022-12至2026-11年化约+14%、最大回撤约−19%，同期沪深300约+3%；参数稍变时结果在约+2%到+20%之间，优势存在但幅度不确定。纸面跟踪从2026-11-20收盘信号开始，原规则作为对照一并记录。</p></div>
           <div><h3>动量框架（v1.2）</h3><p>20 / 60 / 120日收益在权益类ETF（A股、港股、海外）中的百分位，分别乘以30% / 40% / 30%，基础分乘100。债券、商品与可转债不参与排名，只显示绝对动量是否成立。多头排列加5分，60日跑赢沪深300ETF加3分。与美股版的唯一区别：不再对距EMA20超过2.5倍ATR的ETF扣8分。综合分可能超过100，不是胜率。搜索和筛选不重算评分。观察池扩容会改变百分位分数，扩容前后不直接比较排名。</p></div>
           <div><h3>同一套趋势条件</h3><p>Close &gt; EMA20 &gt; SMA50 &gt; SMA120 视为多头排列。三个周期收益均为正、多头排列且60日跑赢基准，划为动量成立；距EMA20超过2.5倍ATR标为加速强势。进入强势后，直到60日收益转负或跌破50日均线才退出（状态缓冲，减少标签来回切换）。趋势条件不满足但中长期收益与50日均线仍支持时，标为等待确认。</p></div>
           <div><h3>统一同花顺前复权日线</h3><p>所有行情仅从同花顺金融API获取；基准使用510300。至少121根、相同交易日窗口才参与评分，缺失保留为空。失败时仅回退同源缓存并标记。成交额取接口真实成交额20日平均；币种人民币。收盘前运行会排除未完成日线。</p></div>

@@ -69,6 +69,7 @@ def indicator_frame(rows):
     prev = close.shift(1)
     tr = pd.concat([high - low, (high - prev).abs(), (low - prev).abs()], axis=1).max(axis=1)
     out = pd.DataFrame(index=f.index)
+    out['open'] = f['open']
     out['close'] = close
     out['atr14'] = tr.rolling(14).mean()
     out['ema20'] = close.ewm(span=20, adjust=False).mean()

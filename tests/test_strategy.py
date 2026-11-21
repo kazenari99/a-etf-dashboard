@@ -121,6 +121,43 @@ class StrategyTests(unittest.TestCase):
             self.assertIn(by['512800']['setup'], ('Absolute up', 'Absolute down'))
         self.assertTrue(all(isinstance(r['score'], float) for r in rows if r['eligible'] and classes.get(r['ticker'], 'equity') == 'equity'))
 
+    def test_v2_signal_skips_recent_sessions(self):
+        entries, p = synthetic_panel()
+        pd.testing.assert_frame_equal(strategy.signal(p), strategy.near_high(p).shift(strategy.SKIP))
+        self.assertEqual(strategy.SKIP, 5)
+
+    def test_next_open_execution_misses_the_gap(self):
+        """A pick that gaps up between the signal close and the next open must not earn the gap."""
+        entries, p = synthetic_panel()
+        cal = list(p['close'].index)
+        ends = strategy.week_ends(cal)
+        d = ends[-3]
+        i = cal.index(d)
+        winner = strategy.picks(p, {}, d)[0]
+        bumped = {k: dict(v, rows=[dict(r) for r in v['rows']]) for k, v in entries.items()}
+        for r in bumped[winner]['rows'][i + 1:]:
+            for f in ('open', 'high', 'low', 'close'):
+                r[f] *= 1.10                         # +10% overnight jump right after the signal
+        q = model.build_panel(bumped, '510300')
+        base = strategy.simulate(p, {}, d, cost=0)['returns']
+        jump = strategy.simulate(q, {}, d, cost=0)['returns']
+        # Same picks on the signal day; the first-day return must not include the 10% gap.
+        self.assertEqual(strategy.picks(q, {}, d)[0], winner)
+        self.assertAlmostEqual(jump.iloc[0], base.iloc[0], places=6)
+
+    def test_weekly_trades_partition_the_picks(self):
+        entries, _ = synthetic_panel()
+        with patch.object(radar, 'ASSET_CLASS', {}), patch.object(strategy, 'TRACK_START', '2026-01-02'):
+            rows, latest, regime, w = radar.analyze_full(entries)
+        cur = [x['ticker'] for x in w['picks']]
+        self.assertEqual(sorted(w['buy'] + w['hold']), sorted(cur))
+        self.assertFalse(set(w['sell']) & set(cur))
+        self.assertGreater(w['trade_date'], w['rebalance_date'])
+        self.assertEqual(w['track']['execution'], 'next_open')
+        self.assertEqual(w['track']['legacy']['rule'], strategy.LEGACY_RULE)
+        for x in w['picks']:
+            self.assertIn('signal', x)
+
 
 if __name__ == '__main__':
     unittest.main()
