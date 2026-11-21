@@ -45,7 +45,7 @@ function setupMatch(x){
 function applyFilters(){
   state.filtered=state.data.filter(x=>(!state.watchOnly||state.favorites.includes(x.ticker))&&(state.group==='all'||x.group===state.group)&&setupMatch(x)&&`${x.ticker} ${etfName(x.ticker)}`.toLowerCase().includes(state.query));
   state.filtered.sort((a,b)=>{const av=a[state.sortKey],bv=b[state.sortKey];if(!finite(av)&&typeof av!=='string')return 1;if(!finite(bv)&&typeof bv!=='string')return -1;return typeof av==='number'?(av-bv)*state.sortDir:String(av).localeCompare(String(bv))*state.sortDir});
-  renderTable(); renderScatter(); renderLeaders(); renderOpportunities(); renderSectors(); savePreferences();
+  renderTable(); renderScatter(); renderSectors(); savePreferences();
   document.querySelectorAll('th[data-sort]').forEach(th=>th.setAttribute('aria-sort',th.dataset.sort===state.sortKey?(state.sortDir===1?'ascending':'descending'):'none'));
   $('#watchOnly').setAttribute('aria-pressed',String(state.watchOnly));
 }
@@ -75,19 +75,6 @@ function renderScatter(){
     dot.setAttribute('role','button');dot.setAttribute('aria-label',`${x.ticker} ${etfName(x.ticker)} 评分 ${scoreText(x.score)}`);dot.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();openDrawer(x);}});dot.addEventListener('click',()=>openDrawer(x)); dot.addEventListener('mouseenter',e=>showTip(e,x));dot.addEventListener('mousemove',moveTip);dot.addEventListener('mouseleave',hideTip);svg.append(dot);
     if(labels.has(x.ticker)){const lab=document.createElementNS(svgNS,'text');lab.setAttribute('x',xp(x.r60*100)+r+3);lab.setAttribute('y',yp(x.r20*100)-r+2);lab.setAttribute('class','dot-label');lab.textContent=x.ticker;svg.append(lab);}
   });
-}
-
-function renderLeaders(){
-  const top=state.filtered.filter(x=>x.eligible&&finite(x.score)).sort((a,b)=>b.score-a.score).slice(0,10),max=Math.max(...top.map(x=>x.score),1);
-  $('#leaderList').innerHTML=top.map(x=>`<div class="leader" data-code="${x.ticker}"><span class="leader-identity"><span class="leader-code">${x.ticker}</span><span class="leader-name">${etfName(x.ticker)}</span><span class="table-chip ${statusClass(x.setup)}">${setupNames[x.setup]}</span></span><div class="leader-track"><div class="leader-fill" style="width:${x.score/max*100}%">${pct(x.r60)}</div></div><span class="leader-score">${scoreText(x.score)}</span></div>`).join('');
-  document.querySelectorAll('.leader').forEach(el=>el.addEventListener('click',()=>openDrawer(state.data.find(x=>x.ticker===el.dataset.code))));
-}
-
-function renderOpportunities(){
-  const picks=state.filtered.filter(x=>x.setup==='Momentum').sort((a,b)=>b.score-a.score).slice(0,5);
-  $('#opportunityGrid').innerHTML=picks.map(x=>`<article class="opp-card" data-code="${x.ticker}"><div class="opp-top"><span class="opp-identity"><span class="opp-code">${x.ticker}</span><span class="opp-name">${etfName(x.ticker)}</span></span><span class="opp-price">¥${price(x.close)}</span></div><span class="status-chip">${setupNames[x.setup]}</span><div class="return-row">${[20,60,120].map(p=>`<div class="return-cell"><span>${p}日</span><strong class="${cls(x[`r${p}`])}">${pct(x[`r${p}`])}</strong></div>`).join('')}</div><div class="level-row"><span>回踩区</span><b>${price(x.pullback_low)}–${price(x.pullback_high)}</b></div><div class="level-row"><span>突破触发</span><b>${price(x.breakout_trigger)}</b></div><div class="level-row"><span>失效参考</span><b>${price(x.stop_ref)}</b></div></article>`).join('');
-  if(!picks.length)$('#opportunityGrid').innerHTML='<p class="empty-note">当前筛选没有符合全部动量条件的ETF，可切换至「等待确认」继续观察。</p>';
-  document.querySelectorAll('.opp-card').forEach(el=>el.addEventListener('click',()=>openDrawer(state.data.find(x=>x.ticker===el.dataset.code))));
 }
 
 function renderTable(){
@@ -121,7 +108,12 @@ function bind(){
 
 function renderSectors(){
  const groups=[...new Set(state.data.map(x=>x.group))].map(group=>{const all=state.data.filter(x=>x.group===group),d=all.filter(x=>x.eligible),avg=k=>{const v=d.map(r=>r[k]).filter(finite);return v.length?v.reduce((s,x)=>s+x,0)/v.length:null;};return {group,count:d.length,total:all.length,score:avg('score'),returns:[20,60,120].map(n=>avg(`r${n}`)),aligned:d.filter(r=>r.trend_aligned).length};}).sort((a,b)=>(b.score??-Infinity)-(a.score??-Infinity));
- $('#sectorGrid').innerHTML='<div class="heat-row heat-head"><span>板块 / 动量分</span><span>20日</span><span>60日</span><span>120日</span><span>多头 / 有效</span></div>'+groups.map(g=>`<button type="button" class="heat-row" data-group="${escapeHTML(g.group)}"><span><b>${escapeHTML(g.group)}</b><small>评分 ${scoreText(g.score)} · ${g.count}/${g.total} 有效</small></span>${g.returns.map(v=>`<span class="heat-cell ${cls(v)}">${pct(v)}</span>`).join('')}<span>${g.aligned}/${g.count}<small>${g.count?Math.round(g.aligned/g.count*100):0}% 多头</small></span></button>`).join('');
+ const scored=groups.filter(g=>finite(g.score)),others=groups.filter(g=>!finite(g.score));
+ const compact=!state.sectorsExpanded&&scored.length>8;
+ const shown=compact?[...scored.slice(0,5),...scored.slice(-3),...others]:groups;
+ const toggle=scored.length>8?`<button type="button" class="heat-toggle" id="sectorToggle">${compact?`展开全部 ${groups.length} 组`:'收起'}</button>`:'';
+ $('#sectorGrid').innerHTML='<div class="heat-row heat-head"><span>板块 / 动量分</span><span>20日</span><span>60日</span><span>120日</span><span>多头 / 有效</span></div>'+shown.map(g=>`<button type="button" class="heat-row" data-group="${escapeHTML(g.group)}"><span><b>${escapeHTML(g.group)}</b><small>评分 ${scoreText(g.score)} · ${g.count}/${g.total} 有效</small></span>${g.returns.map(v=>`<span class="heat-cell ${cls(v)}">${pct(v)}</span>`).join('')}<span>${g.aligned}/${g.count}<small>${g.count?Math.round(g.aligned/g.count*100):0}% 多头</small></span></button>`).join('')+toggle;
+ const tg=$('#sectorToggle');if(tg)tg.addEventListener('click',()=>{state.sectorsExpanded=!state.sectorsExpanded;renderSectors();});
  document.querySelectorAll('[data-group]').forEach(b=>b.addEventListener('click',()=>{state.group=b.dataset.group;syncControls();applyFilters();$('.table-section').scrollIntoView({behavior:'smooth'});}));
 }
 function marketRegime([b20,b60,b120],n){
@@ -212,19 +204,26 @@ function navChart(nav){
 function renderWeekly(){
   const box=$('#weeklySection');
   if(!weekly){box.innerHTML='<p class="empty-note">历史数据不足250个交易日，本次没有周度清单。</p>';return;}
-  const when=weekly.holding_from==='next'?`下周持有 · ${escapeHTML(weekly.rebalance_date)} 收盘选出`:`本周持有 · ${escapeHTML(weekly.rebalance_date)} 收盘选出`;
-  const cards=weekly.picks.map((p,i)=>`<button class="pick-card" data-code="${p.ticker}"><span class="pick-rank">${i+1}</span><b>${etfName(p.ticker)}</b><small>${p.ticker}${weekly.added.includes(p.ticker)?' · <em>新进</em>':''}</small><span class="pick-metric">${p.near_high===0?'处于250日新高':'距250日高 '+pct(p.near_high)}</span><span class="pick-sub">60日 ${pct(p.r60)}</span></button>`).join('');
-  const removed=weekly.removed.length?`换出：${weekly.removed.map(t=>`${etfName(t)} ${t}`).join('、')}`:(weekly.previous_date?'与上周相同，无换出':'');
+  const next=weekly.holding_from==='next';
+  const nm=t=>`${etfName(t)}<small> ${t}</small>`;
+  const title=next?`下周清单 · ${escapeHTML(weekly.trade_date)} 开盘调仓`:`本周持有 · ${escapeHTML(weekly.trade_date)} 已开盘调仓`;
+  const trades=`<div class="trade-lines">
+    <div class="trade sell"><span>卖出</span><b>${weekly.sell.length?weekly.sell.map(nm).join('、'):'无'}</b></div>
+    <div class="trade buy"><span>买入</span><b>${weekly.buy.length?weekly.buy.map(nm).join('、'):'无'}</b></div>
+    <div class="trade hold"><span>继续持有</span><b>${weekly.hold.length?weekly.hold.map(nm).join('、'):'无'}</b></div>
+  </div><p class="weekly-note muted">${next?`依据 ${escapeHTML(weekly.rebalance_date)} 收盘数据，${escapeHTML(weekly.trade_date)} 开盘按等权（各约20%）调整。`:`依据 ${escapeHTML(weekly.rebalance_date)} 收盘数据，已于 ${escapeHTML(weekly.trade_date)} 开盘调整。`}${weekly.previous_date?'':'首次建仓。'}</p>`;
+  const cards=weekly.picks.map((p,i)=>`<button class="pick-card" data-code="${p.ticker}"><span class="pick-rank">${i+1}</span><b>${etfName(p.ticker)}</b><small>${p.ticker}${weekly.buy.includes(p.ticker)?' · <em>新进</em>':''}</small><span class="pick-metric" title="排序依据：${weekly.skip}个交易日前的收盘价相对当时250日最高收盘价">${p.signal>-.0005?'5日前处于新高':'5日前距高 '+pct(p.signal)}</span><span class="pick-sub">当前${finite(p.near_high)?(p.near_high>-.0005?'处于新高':'距高 '+pct(p.near_high)):'距高 —'} · 60日 ${pct(p.r60)}</span></button>`).join('');
   const byCluster={};weekly.picks.forEach(p=>{const r=payload.rows.find(x=>x.ticker===p.ticker);if(r&&r.cluster)(byCluster[r.cluster]=byCluster[r.cluster]||[]).push(p.ticker);});
   const conc=Object.entries(byCluster).filter(([,v])=>v.length>=2).map(([k,v])=>`${v.length} 只属于同类暴露「${escapeHTML(k)}」`);
   const concNote=conc.length?`<p class="weekly-note warn">集中度提示：清单中 ${conc.join('，')}，近一年日收益相关性 ≥ 0.95，实际接近押注同一主题，回撤可能更大。</p>`:'';
-  const prov=weekly.provisional?`<p class="weekly-note">按今日收盘，下次调仓的前5：${weekly.provisional.map(p=>etfName(p.ticker)).join('、')}（周五收盘确定）</p>`:'';
+  const prov=weekly.provisional?`<p class="weekly-note">按今日收盘，下次调仓的前5：${weekly.provisional.map(p=>etfName(p.ticker)).join('、')}（周五收盘后确定）</p>`:'';
   const tr=weekly.track;
-  const track=tr?`<div class="track"><div class="track-head"><b>纸面跟踪</b><span>自 ${escapeHTML(weekly.track_start)} · ${tr.weeks} 周 · 已扣单边${(weekly.cost*100).toFixed(1)}%成本</span></div>${navChart(tr.nav)}<div class="track-legend"><span class="strat">周度清单 ${pct(tr.strategy.total)}</span><span class="bench">沪深300ETF ${pct(tr.benchmark.total)}</span><span class="ew">权益ETF等权 ${pct(tr.equal_weight.total)}</span>${tr.strategy.mdd!=null?`<span>清单最大回撤 ${pct(tr.strategy.mdd)}</span>`:''}</div></div>`
-    :`<div class="track"><div class="track-head"><b>纸面跟踪</b><span>自 ${escapeHTML(weekly.track_start)} 起按冻结规则记录，下一个交易日开始计入收益。</span></div></div>`;
-  box.innerHTML=`<div class="panel-head"><div><p class="section-kicker">WEEKLY PICKS · 250日高点轮动</p><h2>${when}</h2></div><span class="badge">前${weekly.top_n}名 · 等权 · 每周调仓</span></div>
-  <div class="pick-grid">${cards}</div>${concNote}<p class="weekly-note">${removed}</p>${prov}${track}
-  <p class="weekly-note muted">规则：每周最后一个交易日，在权益类ETF中选收盘价最接近过去250日最高收盘价的5只，下周等权持有。2022-12至2026-11回测年化约+21%（同期沪深300约+3%），但观察池为事后挑选，以纸面跟踪为准。仅为规则计算结果，不构成投资建议。</p>`;
+  const diff=tr?tr.strategy.total-tr.benchmark.total:null;
+  const track=tr?`<div class="track"><div class="track-head"><b>纸面跟踪 ${diff>=0?`<span class="positive">跑赢沪深300 ${pct(diff)}</span>`:`<span class="negative">跑输沪深300 ${pct(-diff)}</span>`}</b><span>自 ${escapeHTML(weekly.track_start)} 收盘信号起 · ${tr.weeks} 周 · 次日开盘成交 · 已扣单边${(weekly.cost*100).toFixed(1)}%成本</span></div>${navChart(tr.nav)}<div class="track-legend"><span class="strat">周度清单 ${pct(tr.strategy.total)}</span><span class="bench">沪深300ETF ${pct(tr.benchmark.total)}</span><span class="ew">权益ETF等权 ${pct(tr.equal_weight.total)}</span>${tr.strategy.mdd!=null?`<span>清单最大回撤 ${pct(tr.strategy.mdd)}</span>`:''}${tr.legacy?`<span>原规则(不跳过)对照 ${pct(tr.legacy.total)}</span>`:''}</div></div>`
+    :`<div class="track"><div class="track-head"><b>纸面跟踪</b><span>按 ${escapeHTML(weekly.track_start)} 收盘信号，${escapeHTML(weekly.trade_date)} 开盘建仓后开始计入；次日开盘成交，单边成本0.1%。</span></div></div>`;
+  box.innerHTML=`<div class="panel-head"><div><p class="section-kicker">WEEKLY PICKS · 250日高点轮动 v2</p><h2>${title}</h2></div><span class="badge">前${weekly.top_n}名 · 等权 · 每周一次</span></div>
+  ${trades}<div class="pick-grid">${cards}</div>${concNote}${prov}${track}
+  <p class="weekly-note muted">规则：每周最后一个交易日收盘后，在权益类ETF中按“${weekly.skip}个交易日前距250日最高收盘价的距离”选前5只，下一交易日开盘等权调仓。2022-12至2026-11回测（次日开盘成交、单边0.1%）年化约+14%、最大回撤约−19%，同期沪深300约+3%；参数稍变时结果在约+2%到+20%之间，应按+5%～+12%的保守预期看待。观察池为事后挑选，以纸面跟踪为准。仅为规则计算结果，不构成投资建议。</p>`;
   box.querySelectorAll('.pick-card').forEach(b=>b.addEventListener('click',()=>openDrawer(state.data.find(x=>x.ticker===b.dataset.code))));
 }
 function renderIndexStrip(){

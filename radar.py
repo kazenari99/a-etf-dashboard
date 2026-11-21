@@ -202,30 +202,39 @@ def index_overview(panel,latest):
     return out
 
 def weekly_summary(panel,latest):
-    """Current/previous weekly picks and the out-of-sample paper track (see strategy.py)."""
+    """Weekly picks with the trades they imply, plus the paper track (see strategy.py).
+
+    picks: chosen at `rebalance_date` close by the v2 signal, traded at the next open.
+    trades: what that rebalance sells/buys versus the previous week's picks."""
     cal=list(panel['close'].index)
     ends=strategy.week_ends(cal)
-    nh=strategy.near_high(panel)
-    if nh.loc[latest].notna().sum()==0:return None
+    sig=strategy.signal(panel);nh=strategy.near_high(panel)
+    if sig.loc[latest].notna().sum()==0:return None
     is_end=latest in ends
     past=[d for d in ends if d<latest]
     reb=latest if is_end else (past[-1] if past else None)
     if reb is None:return None
     prev=[d for d in ends if d<reb]
-    def entry(code,near,r60):return dict(ticker=code,near_high=near,r60=r60 if math.isfinite(r60) else None)
-    current=[entry(*x) for x in strategy.ranking(panel,ASSET_CLASS,reb)[:strategy.TOP_N]]
-    previous=strategy.picks(panel,ASSET_CLASS,prev[-1]) if prev else []
+    def entry(code,signal_value,r60):
+        return dict(ticker=code,signal=signal_value,near_high=_num(nh.at[latest,code]),r60=_num(panel['r60'].at[latest,code]))
+    current=[entry(*x) for x in strategy.ranking(panel,ASSET_CLASS,reb,sig)[:strategy.TOP_N]]
+    previous=strategy.picks(panel,ASSET_CLASS,prev[-1],sig=sig) if prev else []
     cur=[x['ticker'] for x in current]
-    out=dict(rule=strategy.RULE_VERSION,top_n=strategy.TOP_N,lookback=strategy.LOOKBACK,cost=strategy.COST,
-             rebalance_date=reb,holding_from='next' if is_end else 'this',picks=current,previous_date=prev[-1] if prev else None,
-             added=[c for c in cur if c not in previous],removed=[c for c in previous if c not in cur],
-             provisional=None if is_end else [entry(*x) for x in strategy.ranking(panel,ASSET_CLASS,latest)[:strategy.TOP_N]],
+    nxt=dt.date.fromisoformat(reb)+dt.timedelta(days=1)
+    while not trading_calendar.is_trading_day(nxt):nxt+=dt.timedelta(days=1)
+    out=dict(rule=strategy.RULE_VERSION,top_n=strategy.TOP_N,lookback=strategy.LOOKBACK,skip=strategy.SKIP,cost=strategy.COST,
+             rebalance_date=reb,trade_date=nxt.isoformat(),holding_from='next' if is_end else 'this',picks=current,previous_date=prev[-1] if prev else None,
+             buy=[c for c in cur if c not in previous],sell=[c for c in previous if c not in cur],hold=[c for c in cur if c in previous],
+             provisional=None if is_end else [entry(*x) for x in strategy.ranking(panel,ASSET_CLASS,latest,sig)[:strategy.TOP_N]],
              track_start=strategy.TRACK_START)
-    sim=strategy.simulate(panel,ASSET_CLASS,strategy.TRACK_START)
+    out['added'],out['removed']=out['buy'],out['sell']  # kept for older page scripts
+    sim=strategy.simulate(panel,ASSET_CLASS,strategy.TRACK_START,sig=sig)
+    legacy=strategy.simulate(panel,ASSET_CLASS,strategy.TRACK_START,sig=nh)
     if len(sim['returns']):
-        navs=pd.DataFrame({'s':(1+sim['returns']).cumprod(),'b':(1+sim['benchmark']).cumprod(),'e':(1+sim['equal_weight']).cumprod()})
-        out['track']=dict(days=len(navs),weeks=len(sim['holdings']),strategy=strategy.stats(sim['returns']),benchmark=strategy.stats(sim['benchmark']),
-                          equal_weight=strategy.stats(sim['equal_weight']),
+        navs=pd.DataFrame({'s':(1+sim['returns']).cumprod(),'b':(1+sim['benchmark']).cumprod(),'e':(1+sim['equal_weight']).cumprod(),
+                           'l':(1+legacy['returns']).cumprod().reindex(sim['returns'].index)})
+        out['track']=dict(days=len(navs),weeks=len(sim['holdings']),execution='next_open',strategy=strategy.stats(sim['returns']),benchmark=strategy.stats(sim['benchmark']),
+                          equal_weight=strategy.stats(sim['equal_weight']),legacy=dict(rule=strategy.LEGACY_RULE,**strategy.stats(legacy['returns'])),
                           nav=[dict(date=d,s=round(r.s,5),b=round(r.b,5),e=round(r.e,5)) for d,r in navs.iterrows()],
                           holdings=[dict(date=d,picks=c) for d,c in sim['holdings'][-12:]])
     else:
