@@ -1,3 +1,4 @@
+import math
 import unittest
 from unittest.mock import patch
 import backtest
@@ -36,8 +37,9 @@ class BacktestTests(unittest.TestCase):
              patch.object(backtest.radar, 'api_get', side_effect=fake) as call, \
              patch.object(backtest.time, 'sleep'), patch.object(backtest, 'CACHE') as cache:
             entries = backtest.fetch()
-        self.assertEqual(call.call_count, 7)  # 66 codes, 10 per request
-        self.assertEqual(len(entries), 66)
+        n = sum(len(v) for v in backtest.ETF_GROUPS.values())
+        self.assertEqual(call.call_count, math.ceil(n / 10))  # 10 codes per request
+        self.assertEqual(len(entries), n)
         self.assertTrue(all(len(p['thscodes'].split(',')) <= 10 for (_, p, _), _ in call.call_args_list))
         cache.write_text.assert_called_once()
 
@@ -51,8 +53,9 @@ class BacktestTests(unittest.TestCase):
              patch.object(backtest.time, 'sleep'), patch.object(backtest, 'CACHE'):
             entries = backtest.fetch()
         self.assertEqual(batch.call_count, 1)  # batch tried once, then abandoned
-        self.assertEqual(one.call_count, 66)
-        self.assertEqual(len(entries), 66)
+        n = sum(len(v) for v in backtest.ETF_GROUPS.values())
+        self.assertEqual(one.call_count, n)
+        self.assertEqual(len(entries), n)
 
     def test_single_permission_error_reports_key_problem(self):
         def denied(*args, **kwargs):

@@ -90,6 +90,37 @@ class StrategyTests(unittest.TestCase):
             self.assertEqual(set(x['above']), {'50', '120', '250'})
             self.assertLessEqual(x['near_high'], 0)
 
+    def test_added_members_only_from_their_date(self):
+        entries, p = synthetic_panel()
+        dates = list(p['close'].index)
+        cut = dates[-30]
+        ok = strategy.candidates(p, {}, added={'510050': cut})
+        self.assertFalse(ok['510050'].loc[:dates[-31]].any())
+        self.assertTrue(ok['510050'].loc[cut:].equals(strategy.candidates(p, {}, added={})['510050'].loc[cut:]))
+
+    def test_cash_hurdle_and_domestic_breadth(self):
+        entries, p = synthetic_panel()
+        fixed = model.cash_hurdle(p)
+        self.assertAlmostEqual(fixed.iloc[-1], (1 + model.CASH_RATE) ** (120 / 252) - 1)
+        series = model.cash_hurdle(p, cash='512800')
+        self.assertAlmostEqual(series.iloc[-1], p['r120']['512800'].iloc[-1])
+        all_eq = model.regime(p, {})['breadth60'].iloc[-1]
+        dom = model.regime(p, {}, market={'510050': '海外', '159915': '海外'})['breadth60'].iloc[-1]
+        last = p['r60'].iloc[-1].drop(['510050', '159915'])
+        self.assertAlmostEqual(dom, (last > 0).mean())
+        self.assertIsNotNone(all_eq)
+
+    def test_non_equity_rows_have_no_score_but_absolute_label(self):
+        entries, _ = synthetic_panel()
+        classes = {'512800': 'bond'}
+        with patch.object(radar, 'ASSET_CLASS', classes):
+            rows, latest, regime, weekly = radar.analyze_full(entries)
+        by = {r['ticker']: r for r in rows}
+        if by.get('512800', {}).get('eligible'):
+            self.assertIsNone(by['512800']['score'])
+            self.assertIn(by['512800']['setup'], ('Absolute up', 'Absolute down'))
+        self.assertTrue(all(isinstance(r['score'], float) for r in rows if r['eligible'] and classes.get(r['ticker'], 'equity') == 'equity'))
+
 
 if __name__ == '__main__':
     unittest.main()

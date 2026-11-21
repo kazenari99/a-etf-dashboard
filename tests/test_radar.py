@@ -98,4 +98,23 @@ class RadarTests(unittest.TestCase):
                 with self.assertRaises(RuntimeError):radar.build(render=True)
             publish.assert_not_called()
 
+    def test_previous_snapshot_prefers_newest_source(self):
+        local=dict(asof='2026-11-19',generated='a',rows=[]);remote=dict(asof='2026-11-20',generated='b',rows=[])
+        with patch.object(radar,'local_snapshot',return_value=local),patch.object(radar,'published_snapshot',return_value=remote):
+            self.assertEqual(radar.previous_snapshot()['asof'],'2026-11-20')
+        with patch.object(radar,'local_snapshot',return_value=local),patch.object(radar,'published_snapshot',return_value=None):
+            self.assertEqual(radar.previous_snapshot()['asof'],'2026-11-19')
+        with patch.object(radar,'local_snapshot',return_value=None),patch.object(radar,'published_snapshot',return_value=None):
+            self.assertIsNone(radar.previous_snapshot())
+
+    def test_comparison_ignores_unscored_rows(self):
+        eq=lambda t,sc,st='Momentum':dict(ticker=t,score=sc,setup=st,eligible=True,cached=False)
+        bond=dict(ticker='B',score=None,setup='Absolute up',eligible=True,cached=False)
+        meta=dict(model='m',provider='p',benchmark='A',universe_version='u')
+        old=dict(meta,asof='2026-11-19',rows=[eq('A',80),eq('C',60),bond])
+        new=dict(meta,asof='2026-11-20',rows=[eq('A',50),eq('C',70,'Pullback watch'),bond])
+        radar.attach_comparison(new,old)
+        self.assertEqual(set(new['comparison']['changes']),{'A','C'})
+        self.assertEqual(new['comparison']['changes']['C']['rank_delta'],1)
+
 if __name__=='__main__':unittest.main()
