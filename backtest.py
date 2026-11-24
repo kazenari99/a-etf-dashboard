@@ -15,6 +15,7 @@ import datetime as dt
 import json
 import math
 from pathlib import Path
+from statistics import NormalDist
 import time
 
 import numpy as np
@@ -31,6 +32,12 @@ HORIZONS = (5, 20)
 TOP_N = 10
 MIN_NAMES = 20
 EVAL_MIN_ADTV = 2e7  # evaluate on names that are tradeable in size (yuan/day)
+# Weekly-rule robustness (section 6 of the report).
+GRID_SKIP = (0, 3, 5, 10, 20)
+GRID_TOP = (3, 5, 10)
+COSTS = (0.001, 0.002, 0.003)        # per side
+TRIALS = 40          # approaches tried across the three analysis rounds before freezing v2 (README)
+SUBSAMPLE_DROP = 0.3  # share of candidates removed in each universe-subsample run
 
 V1 = model.V1
 CONFIGS = [
@@ -212,6 +219,74 @@ def evaluate(entries, asset_class=ASSET_CLASS, clusters=CLUSTERS, benchmark=rada
                 configs=results, high_corr_pairs=pairs[:30], rule=rule)
 
 
+def sharpe_moments(returns):
+    """Per-period Sharpe ratio, skewness and (non-excess) kurtosis of a return series."""
+    r = pd.Series(returns).dropna()
+    sd = r.std(ddof=1)
+    return dict(sr=float(r.mean() / sd) if sd > 0 else 0.0, skew=float(r.skew()), kurt=float(r.kurt() + 3), n=int(len(r)))
+
+
+def deflated_sharpe(returns, trial_srs, trials):
+    """Probabilistic and deflated Sharpe ratio (Bailey & Lopez de Prado, 2014).
+
+    psr: probability that the true per-period Sharpe exceeds 0 given skew/kurtosis.
+    dsr: same, against the Sharpe the best of `trials` independent zero-skill attempts would
+         reach, with the cross-trial Sharpe variance estimated from `trial_srs` (the
+         parameter grid). Grid variants are correlated, so this variance, and with it the
+         deflation, is if anything understated."""
+    m = sharpe_moments(returns)
+    sr, n = m['sr'], m['n']
+    if n < 3:
+        return None
+    z = NormalDist()
+    var = float(np.var(trial_srs, ddof=1)) if len(trial_srs) > 1 else 0.0
+    gamma = 0.5772156649
+    sr0 = math.sqrt(var) * ((1 - gamma) * z.inv_cdf(1 - 1 / trials) + gamma * z.inv_cdf(1 - 1 / (trials * math.e))) if trials > 1 else 0.0
+    den = math.sqrt(max(1 - m['skew'] * sr + (m['kurt'] - 1) / 4 * sr ** 2, 1e-12))
+    prob = lambda b: z.cdf((sr - b) * math.sqrt(n - 1) / den)
+    return dict(sr_annual=sr * math.sqrt(252), sr0_annual=sr0 * math.sqrt(252), psr=prob(0.0), dsr=prob(sr0),
+                trials=trials, grid=len(trial_srs), skew=m['skew'], kurt=m['kurt'], n=n)
+
+
+def robustness(panel, asset_class, start, runs=100, seed=1):
+    """Parameter grid, cost sensitivity, universe subsampling and the deflated Sharpe."""
+    grid = []
+    for skip in GRID_SKIP:
+        sig = strategy.signal(panel, skip)
+        for n in GRID_TOP:
+            sim = strategy.simulate(panel, asset_class, start, n=n, sig=sig)
+            if len(sim['returns']) < 60:
+                continue
+            st = strategy.stats(sim['returns'])
+            grid.append(dict(skip=skip, top=n, cagr=st['cagr'], mdd=st['mdd'], sharpe=st['sharpe'],
+                             sr=sharpe_moments(sim['returns'])['sr'], current=(skip == strategy.SKIP and n == strategy.TOP_N)))
+    costs = []
+    for c in COSTS:
+        sim = strategy.simulate(panel, asset_class, start, cost=c)
+        st = strategy.stats(sim['returns'])
+        costs.append(dict(cost=c, cagr=st['cagr'], mdd=st['mdd']))
+    # Universe subsampling: how much does the result depend on which ETFs were hand-picked?
+    rng = np.random.default_rng(seed)
+    pool = [t for t in panel['close'].columns if asset_class.get(t, 'equity') == 'equity' and t != strategy.BENCHMARK]
+    sub = []
+    for _ in range(runs):
+        drop = set(rng.choice(pool, size=int(len(pool) * SUBSAMPLE_DROP), replace=False))
+        ac = dict(asset_class) | {t: 'excluded' for t in drop}
+        sim = strategy.simulate(panel, ac, start)
+        a, b = strategy.stats(sim['returns'])['cagr'], strategy.stats(sim['equal_weight'])['cagr']
+        if a is not None and b is not None:
+            sub.append((a, a - b))
+    sim = strategy.simulate(panel, asset_class, start)
+    q = lambda xs, p: float(np.percentile(xs, p))
+    cagrs = [g['cagr'] for g in grid if g['cagr'] is not None]
+    return dict(
+        grid=grid, grid_range=[min(cagrs), max(cagrs)] if cagrs else None, costs=costs,
+        subsample=dict(runs=len(sub), drop=SUBSAMPLE_DROP, cagr_p5=q([x for x, _ in sub], 5), cagr_median=q([x for x, _ in sub], 50),
+                       cagr_p95=q([x for x, _ in sub], 95), excess_p5=q([y for _, y in sub], 5), excess_median=q([y for _, y in sub], 50),
+                       beats_equal_weight=float(np.mean([y > 0 for _, y in sub]))) if sub else None,
+        deflated=deflated_sharpe(sim['returns'], [g['sr'] for g in grid], TRIALS))
+
+
 def rule_backtest(panel, asset_class, start=None, random_runs=200, seed=0):
     """Portfolio-level test of strategy.py's weekly rule against the benchmark, the
     equal-weight candidate set and random 5-name picks from the same candidates."""
@@ -241,7 +316,8 @@ def rule_backtest(panel, asset_class, start=None, random_runs=200, seed=0):
                 turnover=float(sim['turnover'] / (len(sim['returns']) / 252)),
                 by_year=dict(strategy=by(sim['returns']), benchmark=by(sim['benchmark']), equal_weight=by(sim['equal_weight'])),
                 random=dict(runs=int(len(rand)), median=float(np.median(rand)), p95=float(np.percentile(rand, 95)),
-                            beaten=float((rand < st['cagr']).mean())) if len(rand) and st['cagr'] is not None else None)
+                            beaten=float((rand < st['cagr']).mean())) if len(rand) and st['cagr'] is not None else None,
+                robustness=robustness(panel, asset_class, start))
 
 
 # ---------------------------------------------------------------- report
@@ -312,7 +388,31 @@ def report(res, label='同花顺前复权日线'):
             L.append(f'- 同一候选池随机选5只、同样每周调仓、次日开盘成交和成本，{rnd["runs"]} 次模拟：年化中位数 {_p(rnd["median"], 1)}，95分位 {_p(rnd["p95"], 1)}；本规则超过 {rnd["beaten"]:.0%} 的随机组合。随机组合几乎每周全换，成本拖累比本规则大，这一项只作参考。')
         if rule.get('legacy'):
             L.append(f'- 原规则（不跳过最近5日）同口径：年化 {_p(rule["legacy"]["cagr"], 1)}，最大回撤 {_p(rule["legacy"]["mdd"], 1)}。')
-        L += ['- 规则在 2026-11-21 根据本数据选定，样本内结果偏乐观；以页面上自 2026-11-20 起的纸面跟踪为准。']
+        rob = rule.get('robustness')
+        if rob:
+            L += ['', '### 6.1 交易成本敏感性（单边）', '', '| 单边成本 | 年化 | 最大回撤 |', '|---|---|---|']
+            L += [f'| {c["cost"]:.1%} | {_p(c["cagr"], 1)} | {_p(c["mdd"], 1)} |' for c in rob['costs']]
+            L += ['', f'年换手约 {rule["turnover"]:.0f} 倍：单边成本每增加0.1%，年化约少 {rule["turnover"] * 0.1:.1f} 个百分点。跨境ETF开盘时的溢价和冲击成本可能高于国内宽基。']
+            tops = list(GRID_TOP)
+            L += ['', '### 6.2 参数网格（年化；行=跳过最近N日，列=前N名）', '', '| 跳过 | ' + ' | '.join(f'前{n}' for n in tops) + ' |', '|---|' + '---|' * len(tops)]
+            cell = {(g['skip'], g['top']): g for g in rob['grid']}
+            for k in GRID_SKIP:
+                L.append(f'| {k}日 | ' + ' | '.join((f'**{_p(cell[(k, n)]["cagr"], 1)}**' if cell[(k, n)]['current'] else _p(cell[(k, n)]['cagr'], 1)) if (k, n) in cell else '—' for n in tops) + ' |')
+            if rob['grid_range']:
+                L += ['', f'网格内年化 {_p(rob["grid_range"][0], 1)} ~ {_p(rob["grid_range"][1], 1)}，粗体为当前规则。']
+            sub = rob.get('subsample')
+            if sub:
+                L += ['', f'### 6.3 观察池抽样（每次随机去掉 {sub["drop"]:.0%} 的权益ETF，{sub["runs"]} 次）', '',
+                      f'- 年化：5分位 {_p(sub["cagr_p5"], 1)}，中位数 {_p(sub["cagr_median"], 1)}，95分位 {_p(sub["cagr_p95"], 1)}',
+                      f'- 相对同一抽样池等权的超额：5分位 {_p(sub["excess_p5"], 1)}，中位数 {_p(sub["excess_median"], 1)}；{sub["beats_equal_weight"]:.0%} 的抽样跑赢等权',
+                      '- 观察池是事后挑选的；抽样只能说明结果对个别ETF的依赖程度，不能消除“挑选本身”带来的偏差。']
+            d = rob.get('deflated')
+            if d:
+                L += ['', '### 6.4 多重检验校正（Deflated Sharpe Ratio）', '',
+                      f'- 年化夏普 {_f(d["sr_annual"], 2)}（不扣无风险利率，因此略高于上表）；假设先后试过 {d["trials"]} 种做法、都没有真实优势，其中最好的一种预期也能达到年化夏普约 {_f(d["sr0_annual"], 2)}（试验间夏普离散度用 {d["grid"]} 个参数组合估计）。',
+                      f'- 真实夏普 > 0 的概率（PSR）{d["psr"]:.0%}；扣除多重检验后真实夏普高于上述门槛的概率（DSR）{d["dsr"]:.0%}。DSR 低于 95% 说明不能排除结果来自反复试验。',
+                      f'- 日收益偏度 {_f(d["skew"], 2)}、峰度 {d["kurt"]:.1f}，样本 {d["n"]} 个交易日。网格内的方案高度相关，离散度可能被低估，DSR 偏乐观。']
+        L += ['', '- 规则在 2026-11-21 根据本数据选定，样本内结果偏乐观；以页面上自 2026-11-20 起的纸面跟踪为准。']
     L += ['', '## 7. 近250日日收益相关性 ≥ 0.90 的组合（用于核对 universe.CLUSTERS）', '']
     L += [f'- {a} / {b}：{r:.3f}' for a, b, r in res['high_corr_pairs']] or ['- 无']
     L += ['', '## 怎么读', '',

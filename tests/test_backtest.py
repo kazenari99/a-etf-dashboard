@@ -67,6 +67,30 @@ class BacktestTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'key 无效'):
                 backtest.fetch()
 
+    def test_deflated_sharpe_penalises_more_trials(self):
+        import numpy as np
+        r = np.random.default_rng(0).normal(.0015, .01, 1000)
+        one = backtest.deflated_sharpe(r, [0.0], 1)
+        many = backtest.deflated_sharpe(r, list(np.random.default_rng(1).normal(0, .03, 15)), 40)
+        self.assertAlmostEqual(one['psr'], one['dsr'])
+        self.assertGreater(one['psr'], .9)
+        self.assertLess(many['dsr'], many['psr'])
+        self.assertGreater(many['sr0_annual'], 0)
+        noise = backtest.deflated_sharpe(np.random.default_rng(2).normal(0, .01, 1000), [0.0], 1)
+        self.assertLess(noise['psr'], .95)
+
+    def test_rule_robustness_in_report(self):
+        res = self.run_synthetic(1.0, 7)
+        rob = res['rule']['robustness']
+        self.assertEqual(len(rob['costs']), len(backtest.COSTS))
+        cagr = [c['cagr'] for c in rob['costs']]
+        self.assertEqual(cagr, sorted(cagr, reverse=True))  # higher cost, lower return
+        self.assertEqual(sum(g['current'] for g in rob['grid']), 1)
+        self.assertGreater(rob['subsample']['runs'], 0)
+        self.assertIn('dsr', rob['deflated'])
+        text = backtest.report(res, 'test')
+        for key in ('交易成本敏感性', '参数网格', '观察池抽样', 'Deflated Sharpe'):
+            self.assertIn(key, text)
 
 if __name__ == '__main__':
     unittest.main()

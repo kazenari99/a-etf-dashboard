@@ -241,3 +241,4 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .trade.sell{border-color:#5a2a32}.trade.sell span{color:#fca5a5}.trade.buy{border-color:#1f5a46}.trade.buy span{color:#6ee7b7}
 @media (max-width:640px){.trade-lines{grid-template-columns:minmax(0,1fr)}}
 .stale-banner{margin:14px 0 0;padding:11px 14px;border:1px solid rgba(251,191,36,.45);border-radius:10px;background:rgba(251,191,36,.09);color:#fde68a;font-size:13px;line-height:1.7}.stale-banner b{color:#fbbf24}.stale-banner[hidden]{display:none}
+.changes-grid>.empty-note{grid-column:1/-1;font-size:12px;color:var(--muted)}.pick-card .premium-chip{align-self:flex-start;margin-top:4px}

@@ -279,8 +279,13 @@ def attach_comparison(payload, previous):
     scored = lambda r: r.get('eligible') and isinstance(r.get('score'), (int, float)) and math.isfinite(r['score'])
     old = {r['ticker']: r for r in baseline['rows'] if scored(r)}
     new = {r['ticker']: r for r in payload['rows'] if scored(r)}
-    if not old or old.keys() != new.keys() or any(r.get('cached') for r in [*old.values(), *new.values()]):
+    # Compare only ETFs scored from fresh data on both dates, ranked within that common set,
+    # so one missing or cached ETF no longer hides the whole comparison.
+    common = {t for t in old.keys() & new.keys() if not old[t].get('cached') and not new[t].get('cached')}
+    if not new or len(common) < math.ceil(len(new) * MIN_COVERAGE):
         return
+    excluded = sorted((old.keys() | new.keys()) - common)
+    old, new = {t: old[t] for t in common}, {t: new[t] for t in common}
     def ranks(rows):
         return {t: 1 + sum(r['score'] > row['score'] for r in rows.values()) for t, row in rows.items()}
     before, after = ranks(old), ranks(new)
@@ -289,7 +294,7 @@ def attach_comparison(payload, previous):
         t: {'rank_delta': before[t] - after[t],
             'entered_strong': new[t]['setup'] in strong and old[t]['setup'] not in strong,
             'broken': new[t]['setup'] == 'Avoid / broken' and old[t]['setup'] != 'Avoid / broken'}
-        for t in new}}
+        for t in new}, 'excluded': excluded}
 
 
 def published_snapshot():
@@ -336,6 +341,19 @@ def publish(payload):
     (out/'etf_data.json').write_text(encoded,encoding='utf-8')
     return out
 
+def backtest_summary(path=None):
+    """Weekly-rule backtest figures for the page, read from reports/backtest.json so the page,
+    README (checked by tests/test_docs.py) and report quote one source."""
+    try:rule=json.loads(Path(path or ROOT/'reports/backtest.json').read_text()).get('rule') or {}
+    except (OSError,ValueError):return None
+    if rule.get('rule')!=strategy.RULE_VERSION or not rule.get('strategy'):return None
+    rob=rule.get('robustness') or {}
+    pick=lambda d,*ks:{k:d.get(k) for k in ks} if d else None
+    return dict(start=rule['start'],end=rule['end'],cost=rule['cost'],turnover=rule.get('turnover'),
+                cagr=rule['strategy']['cagr'],mdd=rule['strategy']['mdd'],bench_cagr=rule['benchmark']['cagr'],ew_cagr=rule['equal_weight']['cagr'],
+                grid_range=rob.get('grid_range'),costs=rob.get('costs'),
+                subsample=pick(rob.get('subsample'),'cagr_p5','cagr_median','cagr_p95'),deflated=pick(rob.get('deflated'),'psr','dsr','trials'))
+
 def calendar_payload():
     """Closures for the page's own staleness check (the page may be viewed long after it was built)."""
     return dict(holidays=sorted(d.isoformat() for d in trading_calendar.HOLIDAYS),known=sorted(trading_calendar._CLOSED),update_after='21:00')
@@ -358,7 +376,7 @@ def build(offline=False,render=False):
         payload['rows'],payload['asof'],payload['regime'],payload['weekly']=analyze_full(cache,book)
         check_coverage(payload['rows'])
         payload['universe_version']=UNIVERSE_VERSION
-        payload['calendar']=calendar_payload()
+        payload['calendar']=calendar_payload();payload['backtest']=backtest_summary()
         attach_comparison(payload,previous)
         publish(payload);ledger.save(book);return
     entries={};errors=[];key=None if offline else api_key()
@@ -390,7 +408,7 @@ def build(offline=False,render=False):
     check_coverage(rows)
     now=dt.datetime.now(TZ)
     for year in trading_calendar.missing_years(now.date()):errors.append(f'trading_calendar.py 未收录{year}年休市安排，该年仅按工作日判断截止日和调仓日；国务院/交易所公布后请补充。')
-    payload=dict(rows=rows,asof=latest,generated=now.isoformat(timespec='seconds'),errors=errors,offline=offline,provider='同花顺金融API',benchmark='510300',model=model.PROD.name,regime=regime,weekly=weekly,universe_version=UNIVERSE_VERSION,requested_cutoff=completed_cutoff(now).isoformat(),calendar=calendar_payload())
+    payload=dict(rows=rows,asof=latest,generated=now.isoformat(timespec='seconds'),errors=errors,offline=offline,provider='同花顺金融API',benchmark='510300',model=model.PROD.name,regime=regime,weekly=weekly,universe_version=UNIVERSE_VERSION,requested_cutoff=completed_cutoff(now).isoformat(),calendar=calendar_payload(),backtest=backtest_summary())
     attach_comparison(payload, previous_snapshot() if not offline else None)
     out=publish(payload)
     if not offline:
