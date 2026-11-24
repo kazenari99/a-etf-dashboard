@@ -27,6 +27,11 @@ jobs:
           ruff format --check .
       - name: Format check (prettier)
         run: npx --yes prettier@3.3.3 --check radar.js radar.css
+      # Catches workflow mistakes that are still valid YAML (a broken pages.yml once reached main).
+      - name: Lint workflows (actionlint)
+        run: |
+          bash <(curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/v1.7.7/scripts/download-actionlint.bash) 1.7.7
+          ./actionlint -color -ignore 'property "cache-matched-key" is not defined'
       - name: Unit tests
         run: python -m unittest discover -s tests -v
       - name: Page script syntax

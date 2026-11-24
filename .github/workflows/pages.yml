@@ -76,7 +76,7 @@ jobs:
           done
           echo "push=failed" >> "$GITHUB_OUTPUT"
           echo "::warning::Could not push track/ledger.json; the next run will try again"
-
+      - name: Archive research run
         uses: actions/upload-artifact@v4
         with:
           name: etf-research-${{ github.run_id }}
