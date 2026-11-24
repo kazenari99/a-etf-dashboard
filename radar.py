@@ -12,6 +12,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import pandas as pd
+import ledger
 import model
 import strategy
 import trading_calendar
@@ -124,11 +125,12 @@ def _num(v):
     v=float(v)
     return v if math.isfinite(v) else None
 
-def analyze_full(entries):
+def analyze_full(entries,book=None):
     """Rows for every universe ETF, the latest session and the market regime.
 
     The published score is model.PROD (V1 without the overheat penalty, with label
-    hysteresis); see model.py and backtest.py for why.
+    hysteresis); see model.py and backtest.py for why. `book` is the picks ledger
+    (ledger.load()); it is updated in place and the paper track is built from it.
     """
     universe=[(group,code,name) for group,items in ETF_GROUPS.items() for code,name in items]
     benchmark=entries.get(BENCHMARK,{}).get('rows',[])
@@ -177,7 +179,7 @@ def analyze_full(entries):
             r['score']=None;r['setup']='Absolute up' if r['abs_momentum'] else 'Absolute down'
         rows.append(r)
     rows.sort(key=lambda r:r['score'] if r['score'] is not None else -math.inf,reverse=True)
-    weekly=weekly_summary(panel,latest) if panel is not None else None
+    weekly=weekly_summary(panel,latest,book) if panel is not None else None
     return rows,latest,regime,weekly
 
 def analyze(entries):
@@ -201,11 +203,12 @@ def index_overview(panel,latest):
                         r20=_num(panel['r20'].at[latest,code]),r60=_num(panel['r60'].at[latest,code])))
     return out
 
-def weekly_summary(panel,latest):
+def weekly_summary(panel,latest,book=None):
     """Weekly picks with the trades they imply, plus the paper track (see strategy.py).
 
     picks: chosen at `rebalance_date` close by the v2 signal, traded at the next open.
-    trades: what that rebalance sells/buys versus the previous week's picks."""
+    trades: what that rebalance sells/buys versus the previous week's picks.
+    With a ledger, recorded picks win over recomputed ones for past weeks and the track."""
     cal=list(panel['close'].index)
     ends=strategy.week_ends(cal)
     sig=strategy.signal(panel);nh=strategy.near_high(panel)
@@ -214,11 +217,18 @@ def weekly_summary(panel,latest):
     past=[d for d in ends if d<latest]
     reb=latest if is_end else (past[-1] if past else None)
     if reb is None:return None
+    if book is not None:ledger.update(book,panel,ASSET_CLASS,latest,UNIVERSE_VERSION,sig=sig)
+    held=ledger.holdings(book) if book is not None else {}
     prev=[d for d in ends if d<reb]
     def entry(code,signal_value,r60):
-        return dict(ticker=code,signal=signal_value,near_high=_num(nh.at[latest,code]),r60=_num(panel['r60'].at[latest,code]))
-    current=[entry(*x) for x in strategy.ranking(panel,ASSET_CLASS,reb,sig)[:strategy.TOP_N]]
-    previous=strategy.picks(panel,ASSET_CLASS,prev[-1],sig=sig) if prev else []
+        known=code in nh.columns  # a recorded pick may have left the universe since
+        return dict(ticker=code,signal=signal_value,near_high=_num(nh.at[latest,code]) if known else None,r60=_num(panel['r60'].at[latest,code]) if known else None)
+    if reb in held:
+        recorded={p['ticker']:p['signal'] for e in book['entries'] if e['signal_date']==reb for p in e['picks']}
+        current=[entry(c,recorded[c],None) for c in held[reb]]
+    else:
+        current=[entry(*x) for x in strategy.ranking(panel,ASSET_CLASS,reb,sig)[:strategy.TOP_N]]
+    previous=(held[prev[-1]] if prev and prev[-1] in held else strategy.picks(panel,ASSET_CLASS,prev[-1],sig=sig)) if prev else []
     cur=[x['ticker'] for x in current]
     nxt=dt.date.fromisoformat(reb)+dt.timedelta(days=1)
     while not trading_calendar.is_trading_day(nxt):nxt+=dt.timedelta(days=1)
@@ -228,7 +238,12 @@ def weekly_summary(panel,latest):
              provisional=None if is_end else [entry(*x) for x in strategy.ranking(panel,ASSET_CLASS,latest,sig)[:strategy.TOP_N]],
              track_start=strategy.TRACK_START)
     out['added'],out['removed']=out['buy'],out['sell']  # kept for older page scripts
-    sim=strategy.simulate(panel,ASSET_CLASS,strategy.TRACK_START,sig=sig)
+    fixed={d:c for d,c in held.items() if d>=strategy.TRACK_START} or None
+    sim=strategy.simulate(panel,ASSET_CLASS,strategy.TRACK_START,sig=sig,fixed=fixed)
+    out['ledger']=dict(source='ledger' if fixed else 'recomputed',weeks=len(fixed or {}),
+                       late=[e['signal_date'] for e in (book or {}).get('entries',[]) if e.get('recorded_after_trade')],
+                       mismatches=ledger.mismatches(book,panel,ASSET_CLASS,sig=sig) if book is not None else [],
+                       missing=sorted({c for _,c in sim['missing']}))
     legacy=strategy.simulate(panel,ASSET_CLASS,strategy.TRACK_START,sig=nh)
     if len(sim['returns']):
         navs=pd.DataFrame({'s':(1+sim['returns']).cumprod(),'b':(1+sim['benchmark']).cumprod(),'e':(1+sim['equal_weight']).cumprod(),
@@ -321,6 +336,10 @@ def publish(payload):
     (out/'etf_data.json').write_text(encoded,encoding='utf-8')
     return out
 
+def calendar_payload():
+    """Closures for the page's own staleness check (the page may be viewed long after it was built)."""
+    return dict(holidays=sorted(d.isoformat() for d in trading_calendar.HOLIDAYS),known=sorted(trading_calendar._CLOSED),update_after='21:00')
+
 def check_coverage(rows):
     eligible=sum(r['eligible'] for r in rows)
     if not eligible:raise RuntimeError('无日期对齐且满121根的同花顺数据，保留已发布页面。')
@@ -335,11 +354,13 @@ def build(offline=False,render=False):
         if len(cache.get(BENCHMARK,{}).get('rows',[]))<strategy.LOOKBACK+10:raise RuntimeError('缓存历史不足250个交易日，无法计算周度清单，请联网运行。')
         payload=json.loads((ROOT/'reports/etf_data.json').read_text())
         previous=dict(payload)
-        payload['rows'],payload['asof'],payload['regime'],payload['weekly']=analyze_full(cache)
+        book=ledger.load()
+        payload['rows'],payload['asof'],payload['regime'],payload['weekly']=analyze_full(cache,book)
         check_coverage(payload['rows'])
         payload['universe_version']=UNIVERSE_VERSION
+        payload['calendar']=calendar_payload()
         attach_comparison(payload,previous)
-        publish(payload);return
+        publish(payload);ledger.save(book);return
     entries={};errors=[];key=None if offline else api_key()
     tasks=[c for items in ETF_GROUPS.values() for c,_ in items]+[CASH_ETF[0]]
     for i,code in enumerate(tasks,1):
@@ -364,14 +385,16 @@ def build(offline=False,render=False):
             except AuthError:raise
             except Exception as exc:errors.append(f'{code} 净值：{type(exc).__name__}: {exc}；溢价不显示。')
             time.sleep(.4)
-    rows,latest,regime,weekly=analyze_full(entries)
+    book=ledger.load()
+    rows,latest,regime,weekly=analyze_full(entries,book)
     check_coverage(rows)
     now=dt.datetime.now(TZ)
-    if not trading_calendar.known(now.year):errors.append(f'trading_calendar.py 未收录{now.year}年休市安排，仅按工作日判断截止日；交易所公布后请补充。')
-    payload=dict(rows=rows,asof=latest,generated=now.isoformat(timespec='seconds'),errors=errors,offline=offline,provider='同花顺金融API',benchmark='510300',model=model.PROD.name,regime=regime,weekly=weekly,universe_version=UNIVERSE_VERSION,requested_cutoff=completed_cutoff(now).isoformat())
+    for year in trading_calendar.missing_years(now.date()):errors.append(f'trading_calendar.py 未收录{year}年休市安排，该年仅按工作日判断截止日和调仓日；国务院/交易所公布后请补充。')
+    payload=dict(rows=rows,asof=latest,generated=now.isoformat(timespec='seconds'),errors=errors,offline=offline,provider='同花顺金融API',benchmark='510300',model=model.PROD.name,regime=regime,weekly=weekly,universe_version=UNIVERSE_VERSION,requested_cutoff=completed_cutoff(now).isoformat(),calendar=calendar_payload())
     attach_comparison(payload, previous_snapshot() if not offline else None)
     out=publish(payload)
     if not offline:
+        ledger.save(book)
         CACHE.parent.mkdir(exist_ok=True);tmp=CACHE.with_suffix('.tmp');tmp.write_text(json.dumps(entries,ensure_ascii=False));tmp.replace(CACHE)
         archive=ROOT/'archive'/now.strftime('%Y-%m-%d')/now.strftime('%H%M%S');archive.mkdir(parents=True,exist_ok=True)
         for name in ('etf_dashboard.html','etf_data.json'):(archive/name).write_bytes((out/name).read_bytes())

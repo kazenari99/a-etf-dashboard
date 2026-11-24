@@ -143,6 +143,25 @@ function renderChanges(){
  const rises=items.filter(([,v])=>v.rank_delta>0).sort((a,b)=>b[1].rank_delta-a[1].rank_delta);
  $('#dailyChanges').innerHTML=[['排名上升',rises.length?rises.slice(0,3).map(([t,v])=>`${etfName(t)} ↑${v.rank_delta}`).join('、'):'无'],['新进入强势',names(items.filter(([,v])=>v.entered_strong))],['新转为趋势破坏',names(items.filter(([,v])=>v.broken))]].map(([title,text])=>`<article><span>${title}</span><p>${text}</p></article>`).join('');
 }
+// The page can be opened long after it was built; check freshness against today's date.
+function bjNow(){const t=new Date(Date.now()+8*3600e3).toISOString();return {date:t.slice(0,10),time:t.slice(11,16)};}
+function addDays(d,n){const t=new Date(d+'T00:00:00Z');t.setUTCDate(t.getUTCDate()+n);return t.toISOString().slice(0,10);}
+function staleness(p,now=bjNow()){
+  const cal=p.calendar;if(!cal||!p.asof)return null;
+  const closed=new Set(cal.holidays),trading=d=>{const w=new Date(d+'T00:00:00Z').getUTCDay();return w>0&&w<6&&!closed.has(d);};
+  // The daily run starts 19:00 Beijing time; allow until update_after before expecting today's bar.
+  let expected=now.time>=(cal.update_after||'21:00')?now.date:addDays(now.date,-1);
+  while(!trading(expected))expected=addDays(expected,-1);
+  let lag=0;for(let d=addDays(p.asof,1);d<=expected&&lag<60;d=addDays(d,1))if(trading(d))lag++;
+  const unknown=[...new Set([now.date.slice(0,4),p.asof.slice(0,4)])].filter(y=>!cal.known.includes(Number(y)));
+  return {lag,expected,unknown};
+}
+function renderStaleness(){
+  const s=staleness(payload),box=$('#staleBanner');if(!s||!box)return;
+  if(s.lag<1){box.hidden=true;return;}
+  box.hidden=false;
+  box.innerHTML=`<b>数据可能已过期</b>：页面数据截止 ${escapeHTML(payload.asof)}，按交易日历此时应已更新到 ${escapeHTML(s.expected)}，落后 ${s.lag} 个交易日。自动更新可能失败或延迟，周度清单与评分均以页面数据日期为准。${s.unknown.length?`（${escapeHTML(s.unknown.join('、'))}年休市安排未收录，仅按工作日估算）`:''}`;
+}
 function init(){
  try{
   state.data=payload.rows;state.filtered=[...state.data];
@@ -154,7 +173,7 @@ function init(){
   $('#healthLog').innerHTML=payload.errors.length?'<ul>'+payload.errors.map(e=>`<li>${escapeHTML(e)}</li>`).join('')+'</ul>':'<p>本次同花顺行情请求全部完成。'+(cached?'存在缓存，请查看数据时间。':'未使用缓存。')+'</p>';
   const groups=[...new Set(state.data.map(x=>x.group))];$('#groupSelect').innerHTML+=groups.map(g=>`<option value="${escapeHTML(g)}">${escapeHTML(g)}</option>`).join('');
   document.querySelectorAll('th[data-sort]').forEach(th=>{th.setAttribute('tabindex','0');th.setAttribute('role','button');th.addEventListener('keydown',e=>{if(e.key==='Enter')th.click();});});
-  restorePreferences();renderWeekly();renderKPIs();renderRegimeState();renderChanges();bind();applyFilters();
+  restorePreferences();renderStaleness();renderWeekly();renderKPIs();renderRegimeState();renderChanges();bind();applyFilters();
  }catch(err){document.querySelector('main').innerHTML=`<div class="error-state"><h2>数据载入失败</h2><p>${escapeHTML(err.message)}</p></div>`;}
 }
 
@@ -221,8 +240,13 @@ function renderWeekly(){
   const diff=tr?tr.strategy.total-tr.benchmark.total:null;
   const track=tr?`<div class="track"><div class="track-head"><b>纸面跟踪 ${diff>=0?`<span class="positive">跑赢沪深300 ${pct(diff)}</span>`:`<span class="negative">跑输沪深300 ${pct(-diff)}</span>`}</b><span>自 ${escapeHTML(weekly.track_start)} 收盘信号起 · ${tr.weeks} 周 · 次日开盘成交 · 已扣单边${(weekly.cost*100).toFixed(1)}%成本</span></div>${navChart(tr.nav)}<div class="track-legend"><span class="strat">周度清单 ${pct(tr.strategy.total)}</span><span class="bench">沪深300ETF ${pct(tr.benchmark.total)}</span><span class="ew">权益ETF等权 ${pct(tr.equal_weight.total)}</span>${tr.strategy.mdd!=null?`<span>清单最大回撤 ${pct(tr.strategy.mdd)}</span>`:''}${tr.legacy?`<span>原规则(不跳过)对照 ${pct(tr.legacy.total)}</span>`:''}</div></div>`
     :`<div class="track"><div class="track-head"><b>纸面跟踪</b><span>按 ${escapeHTML(weekly.track_start)} 收盘信号，${escapeHTML(weekly.trade_date)} 开盘建仓后开始计入；次日开盘成交，单边成本0.1%。</span></div></div>`;
+  const lg=weekly.ledger;
+  const ledgerNote=!lg?'':lg.source!=='ledger'?'<p class="weekly-note muted">本次没有可用的清单记录，纸面跟踪按当前数据重算。</p>'
+    :`<p class="weekly-note muted">纸面跟踪按每周当时记录的清单计算（${lg.weeks} 周，记录只追加不修改，见仓库 track/ledger.json）。${lg.late.length?`其中 ${lg.late.length} 周是在调仓日开盘后才补记的（${escapeHTML(lg.late.join('、'))}）。`:''}</p>`
+      +(lg.mismatches.length?`<p class="weekly-note warn">按当前代码与数据重算，${lg.mismatches.length} 周的清单与当时记录不同（${escapeHTML(lg.mismatches.join('、'))}）；跟踪以当时记录为准。</p>`:'')
+      +(lg.missing.length?`<p class="weekly-note warn">记录中的 ${escapeHTML(lg.missing.join('、'))} 已不在观察池、没有价格，跟踪按剩余持仓等权计算。</p>`:'');
   box.innerHTML=`<div class="panel-head"><div><p class="section-kicker">WEEKLY PICKS · 250日高点轮动 v2</p><h2>${title}</h2></div><span class="badge">前${weekly.top_n}名 · 等权 · 每周一次</span></div>
-  ${trades}<div class="pick-grid">${cards}</div>${concNote}${prov}${track}
+  ${trades}<div class="pick-grid">${cards}</div>${concNote}${prov}${track}${ledgerNote}
   <p class="weekly-note muted">规则：每周最后一个交易日收盘后，在权益类ETF中按“${weekly.skip}个交易日前距250日最高收盘价的距离”选前5只，下一交易日开盘等权调仓。2022-12至2026-11回测（次日开盘成交、单边0.1%）年化约+14%、最大回撤约−19%，同期沪深300约+3%；参数稍变时结果在约+2%到+20%之间，应按+5%～+12%的保守预期看待。观察池为事后挑选，以纸面跟踪为准。仅为规则计算结果，不构成投资建议。</p>`;
   box.querySelectorAll('.pick-card').forEach(b=>b.addEventListener('click',()=>openDrawer(state.data.find(x=>x.ticker===b.dataset.code))));
 }

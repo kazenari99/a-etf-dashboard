@@ -13,6 +13,10 @@ config/hithink_api_key.txt
 .env
 
 data_cache/backtest_klines.json
+# Vendor price cache: lives in the Actions cache / your machine, not in git.
+data_cache/hithink_klines.json
+data_cache/*.tmp
+track/*.tmp
 reports/backtest_synthetic.*
 
 # Generated on every run; published from the Actions workspace, not from git.
