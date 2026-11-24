@@ -17,6 +17,7 @@ Rule v2 (frozen 2026-11-21; see docs in backtest-findings and README):
 Backtest 2022-12..2026-11 with this execution: see reports/backtest.md (the single source
 for the figures quoted in README and on the page). Nearby parameters ranged from about +2% to +20%, so treat the edge as uncertain.
 """
+
 from __future__ import annotations
 
 import datetime as dt
@@ -32,8 +33,8 @@ LOOKBACK = 250
 SKIP = 5
 TOP_N = 5
 MIN_ADTV = 2e7
-COST = 0.001          # per side; ETF commission + spread, conservative
-TRACK_START = '2026-11-20'   # first signal date; first trade at the next open (2026-11-23)
+COST = 0.001  # per side; ETF commission + spread, conservative
+TRACK_START = '2026-11-20'  # first signal date; first trade at the next open (2026-11-23)
 BENCHMARK = '510300'
 RULE_VERSION = 'near-high-250-skip5-top5-weekly-v2'
 LEGACY_RULE = 'near-high-250-top5-weekly-v1'
@@ -110,8 +111,8 @@ def simulate(panel, asset_class, start, end=None, n=TOP_N, cost=COST, schedule=N
     cal = list(close.index)
     sig = signal(panel) if sig is None else sig
     C = close.to_numpy(float)
-    O = panel['open'].to_numpy(float) if 'open' in panel else C
-    O = np.where(np.isfinite(O), O, C)
+    OP = panel['open'].to_numpy(float) if 'open' in panel else C
+    OP = np.where(np.isfinite(OP), OP, C)
     S = sig.to_numpy(float)
     R60 = np.nan_to_num(panel['r60'].to_numpy(float), nan=-np.inf)
     cand = candidates(panel, asset_class, added).to_numpy() & np.isfinite(S)
@@ -131,8 +132,8 @@ def simulate(panel, asset_class, start, end=None, n=TOP_N, cost=COST, schedule=N
     pending = None
     with np.errstate(invalid='ignore', divide='ignore'):
         for i in range(first, last):
-            gap = np.nan_to_num(O[i + 1] / C[i] - 1)
-            day = np.nan_to_num(C[i + 1] / O[i + 1] - 1)
+            gap = np.nan_to_num(OP[i + 1] / C[i] - 1)
+            day = np.nan_to_num(C[i + 1] / OP[i + 1] - 1)
             cc = np.nan_to_num(C[i + 1] / C[i] - 1)
             if cal[i] in sched:
                 if fixed is not None:
@@ -160,17 +161,29 @@ def simulate(panel, asset_class, start, end=None, n=TOP_N, cost=COST, schedule=N
             bench.append(float(cc[bi]) if bi is not None else 0.0)
             m = cand[i]
             ew.append(float(cc[m].mean()) if m.any() else 0.0)
-    idx = cal[first + 1:last + 1]
-    return dict(returns=pd.Series(out, index=idx), benchmark=pd.Series(bench, index=idx),
-                equal_weight=pd.Series(ew, index=idx), holdings=holdings, turnover=turnover, missing=missing)
+    idx = cal[first + 1 : last + 1]
+    return dict(
+        returns=pd.Series(out, index=idx),
+        benchmark=pd.Series(bench, index=idx),
+        equal_weight=pd.Series(ew, index=idx),
+        holdings=holdings,
+        turnover=turnover,
+        missing=missing,
+    )
 
 
 def stats(returns, rf=0.015):
     if len(returns) < 2:
-        return dict(total=float((1 + returns).prod() - 1) if len(returns) else 0.0, cagr=None, vol=None, sharpe=None, mdd=None)
+        return dict(
+            total=float((1 + returns).prod() - 1) if len(returns) else 0.0, cagr=None, vol=None, sharpe=None, mdd=None
+        )
     nav = (1 + returns).cumprod()
     years = len(returns) / 252
     vol = float(returns.std() * math.sqrt(252))
-    return dict(total=float(nav.iloc[-1] - 1), cagr=float(nav.iloc[-1] ** (1 / years) - 1) if years >= .5 else None,
-                vol=vol, sharpe=float((returns.mean() * 252 - rf) / vol) if vol > 0 else None,
-                mdd=float((nav / nav.cummax() - 1).min()))
+    return dict(
+        total=float(nav.iloc[-1] - 1),
+        cagr=float(nav.iloc[-1] ** (1 / years) - 1) if years >= 0.5 else None,
+        vol=vol,
+        sharpe=float((returns.mean() * 252 - rf) / vol) if vol > 0 else None,
+        mdd=float((nav / nav.cummax() - 1).min()),
+    )

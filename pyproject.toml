@@ -1,0 +1,18 @@
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.format]
+quote-style = "single"
+
+[tool.ruff.lint]
+# pyflakes, pycodestyle errors/warnings, import order, bugbear, pyupgrade
+select = ["F", "E", "W", "I", "B", "UP"]
+ignore = [
+    "E501",  # long lines are left to the formatter
+    "B023",  # closures in the report builders are called immediately
+    "E731",  # short named lambdas are used as local helpers
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["backtest", "ledger", "model", "radar", "strategy", "trading_calendar", "universe"]

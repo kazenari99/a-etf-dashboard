@@ -1,7 +1,8 @@
 """Backtest figures quoted in README must match reports/backtest.json (the single source)."""
+
 import json
-from pathlib import Path
 import unittest
+from pathlib import Path
 
 import radar
 import strategy

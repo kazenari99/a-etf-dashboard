@@ -1,0 +1,33 @@
+name: CI
+# Tests and lint on every pull request and push. The publishing workflow runs the tests
+# again before fetching data; lint lives here only, so style never blocks a daily publish.
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: pip install -r requirements.txt -r requirements-dev.txt
+      - name: Lint (ruff)
+        run: |
+          ruff check .
+          ruff format --check .
+      - name: Format check (prettier)
+        run: npx --yes prettier@3.3.3 --check radar.js radar.css
+      - name: Unit tests
+        run: python -m unittest discover -s tests -v
+      - name: Page script syntax
+        run: node --check radar.js

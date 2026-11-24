@@ -100,11 +100,13 @@ python radar.py
 python -m http.server 8766 --bind 127.0.0.1
 ```
 
-打开 `http://127.0.0.1:8766/`。HTML内嵌全部样式、脚本和数据，可离线打开。数据JSON作为发布与归档结构保留，不在页面提供下载入口。
+打开 `http://127.0.0.1:8766/`。HTML内嵌全部样式、脚本和数据，可离线打开。每只ETF不再附带120日价格序列（页面从未使用），页面体积约减少四分之三。数据JSON作为发布与归档结构保留，不在页面提供下载入口。
 
 - `python radar.py --offline`：只使用同花顺缓存，明确标注离线；不联网。缓存 `data_cache/hithink_klines.json` 不在 git 中（gitignore），需要先联网运行一次生成。离线运行不写入纸面跟踪记录。
 - `python radar.py --render`：重新计算并重绘已保存批次，保留原数据采集时间；不联网。
 - `python -m unittest discover -s tests -v`：模型一致性、日期对齐、错误与限流测试。
+- 代码风格：`pip install -r requirements-dev.txt` 后运行 `ruff check .` 和 `ruff format .`（配置见 `pyproject.toml`）；页面脚本和样式用 `npx prettier@3.3.3 --write radar.js radar.css`。工作流 **CI** 在每个 PR 和 main 推送上运行 lint、格式检查和测试。lint 不在发布工作流里，代码风格问题不会阻止每日发布。
+- 依赖与 Actions 版本由 Dependabot 每月检查一次（`.github/dependabot.yml`）。
 
 ## 每日自动更新与发布
 
@@ -119,7 +121,7 @@ GitHub Actions工作日北京时间19:00计划执行，实际调度可能延迟�
 - `trading_calendar.py` 缺少当年的休市安排，或12月起缺少下一年的，工作流会开 Issue 提醒，页面运行记录也会显示。2027年的休市日按国务院通知（国办发明电〔2026〕10号）推算，交易所12月公布休市通知后需核对，并把该年从 `PROVISIONAL` 中移除。
 - 新的周度清单记录推送失败时（例如 main 开启了分支保护），工作流会开 Issue 提醒。
 
-原脚本已移至 `legacy/etf_dashboard.py`，与旧缓存一起保留作历史参考和原53只名单，已不再作为生产任务入口。A股快照与原美股/OpenD项目互不覆盖。
+原脚本 `legacy/etf_dashboard.py`（原53只名单）及其旧缓存、Tushare 配置样例和资金信息模板已从仓库删除，需要时可从 git 历史中找回（最后一次存在于提交 `ef32a3a`）。A股快照与原美股/OpenD项目互不覆盖。
 
 ## 阅读与每日对照
 

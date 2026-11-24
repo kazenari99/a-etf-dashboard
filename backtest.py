@@ -8,22 +8,23 @@ Writes reports/backtest.md and reports/backtest.json. Every config is scored wit
 model.score_panel and evaluated on the same set of names and dates, so differences come
 from the model, not from the sample.
 """
+
 from __future__ import annotations
 
 import argparse
 import datetime as dt
 import json
 import math
+import time
 from pathlib import Path
 from statistics import NormalDist
-import time
 
 import numpy as np
 import pandas as pd
 
 import model
-import strategy
 import radar
+import strategy
 from universe import ASSET_CLASS, CLUSTERS, ETF_GROUPS, UNIVERSE_VERSION
 
 ROOT = Path(__file__).resolve().parent
@@ -35,8 +36,8 @@ EVAL_MIN_ADTV = 2e7  # evaluate on names that are tradeable in size (yuan/day)
 # Weekly-rule robustness (section 6 of the report).
 GRID_SKIP = (0, 3, 5, 10, 20)
 GRID_TOP = (3, 5, 10)
-COSTS = (0.001, 0.002, 0.003)        # per side
-TRIALS = 40          # approaches tried across the three analysis rounds before freezing v2 (README)
+COSTS = (0.001, 0.002, 0.003)  # per side
+TRIALS = 40  # approaches tried across the three analysis rounds before freezing v2 (README)
 SUBSAMPLE_DROP = 0.3  # share of candidates removed in each universe-subsample run
 
 V1 = model.V1
@@ -68,12 +69,19 @@ def fetch(years=5):
     entries = {}
     batch = True
     for i in range(0, len(codes), 10):
-        chunk = codes[i:i + 10]
+        chunk = codes[i : i + 10]
         if batch:
             try:
-                p = radar.api_get('/api/fund/market/historical-batch', dict(
-                    thscodes=','.join(radar.thscode_of(c) for c in chunk), interval='1d',
-                    start=int(start.timestamp() * 1000), end=int(end.timestamp() * 1000)), key)
+                p = radar.api_get(
+                    '/api/fund/market/historical-batch',
+                    dict(
+                        thscodes=','.join(radar.thscode_of(c) for c in chunk),
+                        interval='1d',
+                        start=int(start.timestamp() * 1000),
+                        end=int(end.timestamp() * 1000),
+                    ),
+                    key,
+                )
             except radar.APIError as exc:
                 if exc.code not in radar.AUTH_API_CODES:
                     raise
@@ -85,24 +93,34 @@ def fetch(years=5):
                     rows = radar.normalize(groups.get(radar.thscode_of(c), []), cutoff)
                     entries[c] = dict(rows=rows, source='同花顺金融API', adjustment='qfq')
                     print(f'{c} {len(rows)} bars', flush=True)
-                time.sleep(.4)
+                time.sleep(0.4)
                 continue
         for c in chunk:
             try:
                 rows = radar.request_history(c, key, days=days, min_bars=1)['rows']
             except radar.APIError as exc:
                 if exc.code in radar.AUTH_API_CODES:
-                    raise RuntimeError(f'单只接口也返回业务码 {exc.code}：key 无效或没有行情权限，请在同花顺 API Key 管理页检查。') from None
+                    raise RuntimeError(
+                        f'单只接口也返回业务码 {exc.code}：key 无效或没有行情权限，请在同花顺 API Key 管理页检查。'
+                    ) from None
                 raise
             except ValueError as exc:
                 print(f'{c} 无数据：{exc}', flush=True)
                 rows = []
             entries[c] = dict(rows=rows, source='同花顺金融API', adjustment='qfq')
             print(f'{c} {len(rows)} bars', flush=True)
-            time.sleep(.4)
+            time.sleep(0.4)
     CACHE.parent.mkdir(exist_ok=True)
-    CACHE.write_text(json.dumps(dict(fetched_at=dt.datetime.now(radar.TZ).isoformat(timespec='seconds'),
-                                     universe_version=UNIVERSE_VERSION, entries=entries), ensure_ascii=False))
+    CACHE.write_text(
+        json.dumps(
+            dict(
+                fetched_at=dt.datetime.now(radar.TZ).isoformat(timespec='seconds'),
+                universe_version=UNIVERSE_VERSION,
+                entries=entries,
+            ),
+            ensure_ascii=False,
+        )
+    )
     return entries
 
 
@@ -116,12 +134,22 @@ def synthetic(n=40, days=900, effect=1.0, seed=7):
     for code in codes:
         drift = np.zeros(days)
         for t in range(1, days):
-            drift[t] = .995 * drift[t - 1] + rng.normal(0, .00012)
-        ret = effect * drift + rng.normal(0, .015, days)
+            drift[t] = 0.995 * drift[t - 1] + rng.normal(0, 0.00012)
+        ret = effect * drift + rng.normal(0, 0.015, days)
         close = 2 * np.exp(np.cumsum(ret))
-        spread = np.abs(rng.normal(0, .006, days)) * close
-        rows = [dict(date=d, open=float(c), high=float(c + s), low=float(max(c - s, .01)), close=float(c),
-                     volume=1e6, turnover=float(rng.uniform(3e7, 3e8))) for d, c, s in zip(dates, close, spread)]
+        spread = np.abs(rng.normal(0, 0.006, days)) * close
+        rows = [
+            dict(
+                date=d,
+                open=float(c),
+                high=float(c + s),
+                low=float(max(c - s, 0.01)),
+                close=float(c),
+                volume=1e6,
+                turnover=float(rng.uniform(3e7, 3e8)),
+            )
+            for d, c, s in zip(dates, close, spread, strict=True)
+        ]
         entries[code] = dict(rows=rows)
     asset = {c: 'equity' for c in codes}
     clusters = {'dup': codes[1:3]}
@@ -133,7 +161,7 @@ def _rank_ic(scores, fwd):
     s, f = scores.rank(axis=1), fwd.where(scores.notna()).rank(axis=1)
     s = s.where(f.notna())
     sc, fc = s.sub(s.mean(axis=1), axis=0), f.sub(f.mean(axis=1), axis=0)
-    den = np.sqrt((sc ** 2).sum(axis=1) * (fc ** 2).sum(axis=1))
+    den = np.sqrt((sc**2).sum(axis=1) * (fc**2).sum(axis=1))
     return ((sc * fc).sum(axis=1) / den.replace(0, np.nan)).where(s.notna().sum(axis=1) >= MIN_NAMES)
 
 
@@ -189,41 +217,71 @@ def evaluate(entries, asset_class=ASSET_CLASS, clusters=CLUSTERS, benchmark=rada
             spread = qs['Q5'] - qs['Q1']
             excess, churn = _top(scores, fwd[k])
             res[f'h{k}'] = dict(
-                days=int(ic.notna().sum()), ic_mean=float(ic.mean()), ic_ir=float(ic.mean() / ic.std()) if ic.std() else None,
-                ic_t=_tstat(ic, k), ic_positive=float((ic.dropna() > 0).mean()),
-                quintiles={c: float(qs[c].mean()) for c in qs}, q5_q1=float(spread.mean()), q5_q1_t=_tstat(spread, k),
-                top_excess=float(excess.mean()), top_excess_t=_tstat(excess, k), top_churn=churn,
+                days=int(ic.notna().sum()),
+                ic_mean=float(ic.mean()),
+                ic_ir=float(ic.mean() / ic.std()) if ic.std() else None,
+                ic_t=_tstat(ic, k),
+                ic_positive=float((ic.dropna() > 0).mean()),
+                quintiles={c: float(qs[c].mean()) for c in qs},
+                q5_q1=float(spread.mean()),
+                q5_q1_t=_tstat(spread, k),
+                top_excess=float(excess.mean()),
+                top_excess_t=_tstat(excess, k),
+                top_churn=churn,
                 ic_by_year={int(y): float(v) for y, v in ic.groupby(years).mean().dropna().items()},
                 ic_by_regime={s: float(v) for s, v in ic.groupby(regime).mean().dropna().items()},
-                top_excess_by_regime={s: float(v) for s, v in excess.groupby(regime).mean().dropna().items()})
+                top_excess_by_regime={s: float(v) for s, v in excess.groupby(regime).mean().dropna().items()},
+            )
         # Do the labels separate future returns? Excess 20-day return vs the common set.
         setup = out['setup'].where(common)
         f20 = fwd[20].where(common)
         ex = f20.sub(f20.mean(axis=1), axis=0)
-        res['setups'] = {s: dict(share=float((setup == s).sum().sum() / common.sum().sum()), excess20=float(ex.where(setup == s).stack().mean()))
-                         for s in ('Momentum', 'Strong / wait pullback', 'Pullback watch', 'Avoid / broken')}
+        res['setups'] = {
+            s: dict(
+                share=float((setup == s).sum().sum() / common.sum().sum()),
+                excess20=float(ex.where(setup == s).stack().mean()),
+            )
+            for s in ('Momentum', 'Strong / wait pullback', 'Pullback watch', 'Avoid / broken')
+        }
         strong = setup.isin(model.STRONG) & common
         res['strong_entries_per_day'] = float((strong & ~strong.shift(1, fill_value=False)).sum(axis=1).iloc[1:].mean())
         results.append(res)
     daily = close.pct_change().iloc[-250:]
     corr = daily.corr(min_periods=120)
-    pairs = sorted(((a, b, float(corr.at[a, b])) for i, a in enumerate(corr.columns) for b in corr.columns[i + 1:]
-                    if pd.notna(corr.at[a, b]) and corr.at[a, b] >= .9), key=lambda x: -x[2])
+    pairs = sorted(
+        (
+            (a, b, float(corr.at[a, b]))
+            for i, a in enumerate(corr.columns)
+            for b in corr.columns[i + 1 :]
+            if pd.notna(corr.at[a, b]) and corr.at[a, b] >= 0.9
+        ),
+        key=lambda x: -x[2],
+    )
     cal = panel['calendar']
     rule = rule_backtest(panel, asset_class)
     valid = common.sum(axis=1) >= MIN_NAMES
     span = (valid[valid].index[0], valid[valid].index[-1]) if valid.any() else (None, None)
-    return dict(generated=dt.datetime.now(radar.TZ).isoformat(timespec='seconds'), calendar=[cal[0], cal[-1]] if cal else None,
-                eval_span=list(span), names=int(common.any().sum()), eval_min_adtv=EVAL_MIN_ADTV, top_n=TOP_N,
-                regime_share={k: float(v) for k, v in regime[valid].value_counts(normalize=True).items()},
-                configs=results, high_corr_pairs=pairs[:30], rule=rule)
+    return dict(
+        generated=dt.datetime.now(radar.TZ).isoformat(timespec='seconds'),
+        calendar=[cal[0], cal[-1]] if cal else None,
+        eval_span=list(span),
+        names=int(common.any().sum()),
+        eval_min_adtv=EVAL_MIN_ADTV,
+        top_n=TOP_N,
+        regime_share={k: float(v) for k, v in regime[valid].value_counts(normalize=True).items()},
+        configs=results,
+        high_corr_pairs=pairs[:30],
+        rule=rule,
+    )
 
 
 def sharpe_moments(returns):
     """Per-period Sharpe ratio, skewness and (non-excess) kurtosis of a return series."""
     r = pd.Series(returns).dropna()
     sd = r.std(ddof=1)
-    return dict(sr=float(r.mean() / sd) if sd > 0 else 0.0, skew=float(r.skew()), kurt=float(r.kurt() + 3), n=int(len(r)))
+    return dict(
+        sr=float(r.mean() / sd) if sd > 0 else 0.0, skew=float(r.skew()), kurt=float(r.kurt() + 3), n=int(len(r))
+    )
 
 
 def deflated_sharpe(returns, trial_srs, trials):
@@ -241,11 +299,24 @@ def deflated_sharpe(returns, trial_srs, trials):
     z = NormalDist()
     var = float(np.var(trial_srs, ddof=1)) if len(trial_srs) > 1 else 0.0
     gamma = 0.5772156649
-    sr0 = math.sqrt(var) * ((1 - gamma) * z.inv_cdf(1 - 1 / trials) + gamma * z.inv_cdf(1 - 1 / (trials * math.e))) if trials > 1 else 0.0
-    den = math.sqrt(max(1 - m['skew'] * sr + (m['kurt'] - 1) / 4 * sr ** 2, 1e-12))
+    sr0 = (
+        math.sqrt(var) * ((1 - gamma) * z.inv_cdf(1 - 1 / trials) + gamma * z.inv_cdf(1 - 1 / (trials * math.e)))
+        if trials > 1
+        else 0.0
+    )
+    den = math.sqrt(max(1 - m['skew'] * sr + (m['kurt'] - 1) / 4 * sr**2, 1e-12))
     prob = lambda b: z.cdf((sr - b) * math.sqrt(n - 1) / den)
-    return dict(sr_annual=sr * math.sqrt(252), sr0_annual=sr0 * math.sqrt(252), psr=prob(0.0), dsr=prob(sr0),
-                trials=trials, grid=len(trial_srs), skew=m['skew'], kurt=m['kurt'], n=n)
+    return dict(
+        sr_annual=sr * math.sqrt(252),
+        sr0_annual=sr0 * math.sqrt(252),
+        psr=prob(0.0),
+        dsr=prob(sr0),
+        trials=trials,
+        grid=len(trial_srs),
+        skew=m['skew'],
+        kurt=m['kurt'],
+        n=n,
+    )
 
 
 def robustness(panel, asset_class, start, runs=100, seed=1):
@@ -258,8 +329,17 @@ def robustness(panel, asset_class, start, runs=100, seed=1):
             if len(sim['returns']) < 60:
                 continue
             st = strategy.stats(sim['returns'])
-            grid.append(dict(skip=skip, top=n, cagr=st['cagr'], mdd=st['mdd'], sharpe=st['sharpe'],
-                             sr=sharpe_moments(sim['returns'])['sr'], current=(skip == strategy.SKIP and n == strategy.TOP_N)))
+            grid.append(
+                dict(
+                    skip=skip,
+                    top=n,
+                    cagr=st['cagr'],
+                    mdd=st['mdd'],
+                    sharpe=st['sharpe'],
+                    sr=sharpe_moments(sim['returns'])['sr'],
+                    current=(skip == strategy.SKIP and n == strategy.TOP_N),
+                )
+            )
     costs = []
     for c in COSTS:
         sim = strategy.simulate(panel, asset_class, start, cost=c)
@@ -280,11 +360,23 @@ def robustness(panel, asset_class, start, runs=100, seed=1):
     q = lambda xs, p: float(np.percentile(xs, p))
     cagrs = [g['cagr'] for g in grid if g['cagr'] is not None]
     return dict(
-        grid=grid, grid_range=[min(cagrs), max(cagrs)] if cagrs else None, costs=costs,
-        subsample=dict(runs=len(sub), drop=SUBSAMPLE_DROP, cagr_p5=q([x for x, _ in sub], 5), cagr_median=q([x for x, _ in sub], 50),
-                       cagr_p95=q([x for x, _ in sub], 95), excess_p5=q([y for _, y in sub], 5), excess_median=q([y for _, y in sub], 50),
-                       beats_equal_weight=float(np.mean([y > 0 for _, y in sub]))) if sub else None,
-        deflated=deflated_sharpe(sim['returns'], [g['sr'] for g in grid], TRIALS))
+        grid=grid,
+        grid_range=[min(cagrs), max(cagrs)] if cagrs else None,
+        costs=costs,
+        subsample=dict(
+            runs=len(sub),
+            drop=SUBSAMPLE_DROP,
+            cagr_p5=q([x for x, _ in sub], 5),
+            cagr_median=q([x for x, _ in sub], 50),
+            cagr_p95=q([x for x, _ in sub], 95),
+            excess_p5=q([y for _, y in sub], 5),
+            excess_median=q([y for _, y in sub], 50),
+            beats_equal_weight=float(np.mean([y > 0 for _, y in sub])),
+        )
+        if sub
+        else None,
+        deflated=deflated_sharpe(sim['returns'], [g['sr'] for g in grid], TRIALS),
+    )
 
 
 def rule_backtest(panel, asset_class, start=None, random_runs=200, seed=0):
@@ -305,19 +397,35 @@ def rule_backtest(panel, asset_class, start=None, random_runs=200, seed=0):
     rng = np.random.default_rng(seed)
     rand = []
     for _ in range(random_runs):
-        noise = pd.DataFrame(rng.random(panel['close'].shape), index=panel['close'].index, columns=panel['close'].columns)
+        noise = pd.DataFrame(
+            rng.random(panel['close'].shape), index=panel['close'].index, columns=panel['close'].columns
+        )
         noise = noise.where(strategy.signal(panel).notna())
         rand.append(strategy.stats(strategy.simulate(panel, asset_class, start, sig=noise)['returns'])['cagr'])
     rand = np.array([r for r in rand if r is not None])
     st = strategy.stats(sim['returns'])
     legacy = strategy.stats(strategy.simulate(panel, asset_class, start, sig=strategy.near_high(panel))['returns'])
-    return dict(legacy=legacy, start=sim['returns'].index[0], end=sim['returns'].index[-1], rule=strategy.RULE_VERSION, cost=strategy.COST,
-                strategy=st, benchmark=strategy.stats(sim['benchmark']), equal_weight=strategy.stats(sim['equal_weight']),
-                turnover=float(sim['turnover'] / (len(sim['returns']) / 252)),
-                by_year=dict(strategy=by(sim['returns']), benchmark=by(sim['benchmark']), equal_weight=by(sim['equal_weight'])),
-                random=dict(runs=int(len(rand)), median=float(np.median(rand)), p95=float(np.percentile(rand, 95)),
-                            beaten=float((rand < st['cagr']).mean())) if len(rand) and st['cagr'] is not None else None,
-                robustness=robustness(panel, asset_class, start))
+    return dict(
+        legacy=legacy,
+        start=sim['returns'].index[0],
+        end=sim['returns'].index[-1],
+        rule=strategy.RULE_VERSION,
+        cost=strategy.COST,
+        strategy=st,
+        benchmark=strategy.stats(sim['benchmark']),
+        equal_weight=strategy.stats(sim['equal_weight']),
+        turnover=float(sim['turnover'] / (len(sim['returns']) / 252)),
+        by_year=dict(strategy=by(sim['returns']), benchmark=by(sim['benchmark']), equal_weight=by(sim['equal_weight'])),
+        random=dict(
+            runs=int(len(rand)),
+            median=float(np.median(rand)),
+            p95=float(np.percentile(rand, 95)),
+            beaten=float((rand < st['cagr']).mean()),
+        )
+        if len(rand) and st['cagr'] is not None
+        else None,
+        robustness=robustness(panel, asset_class, start),
+    )
 
 
 # ---------------------------------------------------------------- report
@@ -335,7 +443,7 @@ def verdict(base, cand):
     years = [y for y in c['ic_by_year'] if y in b['ic_by_year']]
     wins = sum(c['ic_by_year'][y] > b['ic_by_year'][y] for y in years)
     better = c['ic_mean'] > b['ic_mean'] and c['q5_q1'] > b['q5_q1'] and c['top_excess'] > b['top_excess']
-    if better and years and wins / len(years) >= .6:
+    if better and years and wins / len(years) >= 0.6:
         return f'改善（{wins}/{len(years)} 年 IC 更高）'
     if c['ic_mean'] < b['ic_mean'] and c['q5_q1'] < b['q5_q1']:
         return '变差'
@@ -344,40 +452,96 @@ def verdict(base, cand):
 
 def report(res, label='同花顺前复权日线'):
     base = res['configs'][0]
-    L = ['# 动量模型回测报告', '',
-         f'- 数据：{label}，日历 {res["calendar"][0]} ~ {res["calendar"][1]}；评估区间 {res["eval_span"][0]} ~ {res["eval_span"][1]}',
-         f'- 评估样本：权益类、满足121日对齐、20日均成交额 ≥ {res["eval_min_adtv"] / 1e8:.1f} 亿元，共 {res["names"]} 只；所有方案用同一样本',
-         '- 市场状态占比：' + '，'.join(f'{k} {v:.0%}' for k, v in res['regime_share'].items()),
-         f'- 生成时间：{res["generated"]}', '',
-         '## 1. 方案对比（20日前瞻）', '',
-         '| 方案 | Rank IC | IC t值 | IC>0 天数 | Q5−Q1 | 前10超额 | 前10日换手 | 结论 |', '|---|---|---|---|---|---|---|---|']
+    L = [
+        '# 动量模型回测报告',
+        '',
+        f'- 数据：{label}，日历 {res["calendar"][0]} ~ {res["calendar"][1]}；评估区间 {res["eval_span"][0]} ~ {res["eval_span"][1]}',
+        f'- 评估样本：权益类、满足121日对齐、20日均成交额 ≥ {res["eval_min_adtv"] / 1e8:.1f} 亿元，共 {res["names"]} 只；所有方案用同一样本',
+        '- 市场状态占比：' + '，'.join(f'{k} {v:.0%}' for k, v in res['regime_share'].items()),
+        f'- 生成时间：{res["generated"]}',
+        '',
+        '## 1. 方案对比（20日前瞻）',
+        '',
+        '| 方案 | Rank IC | IC t值 | IC>0 天数 | Q5−Q1 | 前10超额 | 前10日换手 | 结论 |',
+        '|---|---|---|---|---|---|---|---|',
+    ]
     for c in res['configs']:
         h = c['h20']
-        L.append(f'| {c["name"]} | {_f(h["ic_mean"])} | {_f(h["ic_t"], 2)} | {h["ic_positive"]:.0%} | {_p(h["q5_q1"])} | {_p(h["top_excess"])} | {_p(h["top_churn"], 0) if h["top_churn"] is not None else "—"} | {"基准" if c is base else verdict(base, c)} |')
+        L.append(
+            f'| {c["name"]} | {_f(h["ic_mean"])} | {_f(h["ic_t"], 2)} | {h["ic_positive"]:.0%} | {_p(h["q5_q1"])} | {_p(h["top_excess"])} | {_p(h["top_churn"], 0) if h["top_churn"] is not None else "—"} | {"基准" if c is base else verdict(base, c)} |'
+        )
     L += ['', '## 2. 5日前瞻', '', '| 方案 | Rank IC | IC t值 | Q5−Q1 | 前10超额 |', '|---|---|---|---|---|']
     for c in res['configs']:
         h = c['h5']
-        L.append(f'| {c["name"]} | {_f(h["ic_mean"])} | {_f(h["ic_t"], 2)} | {_p(h["q5_q1"])} | {_p(h["top_excess"])} |')
+        L.append(
+            f'| {c["name"]} | {_f(h["ic_mean"])} | {_f(h["ic_t"], 2)} | {_p(h["q5_q1"])} | {_p(h["top_excess"])} |'
+        )
     years = sorted({y for c in res['configs'] for y in c['h20']['ic_by_year']})
-    L += ['', '## 3. 分年度 20日 Rank IC', '', '| 方案 | ' + ' | '.join(map(str, years)) + ' |', '|---|' + '---|' * len(years)]
+    L += [
+        '',
+        '## 3. 分年度 20日 Rank IC',
+        '',
+        '| 方案 | ' + ' | '.join(map(str, years)) + ' |',
+        '|---|' + '---|' * len(years),
+    ]
     for c in res['configs']:
         L.append(f'| {c["name"]} | ' + ' | '.join(_f(c['h20']['ic_by_year'].get(y)) for y in years) + ' |')
     states = ['risk_on', 'neutral', 'risk_off']
-    L += ['', '## 4. 分市场状态（20日）', '', '| 方案 | ' + ' | '.join(f'{s} IC' for s in states) + ' | ' + ' | '.join(f'{s} 前10超额' for s in states) + ' |', '|---|' + '---|' * 6]
+    L += [
+        '',
+        '## 4. 分市场状态（20日）',
+        '',
+        '| 方案 | '
+        + ' | '.join(f'{s} IC' for s in states)
+        + ' | '
+        + ' | '.join(f'{s} 前10超额' for s in states)
+        + ' |',
+        '|---|' + '---|' * 6,
+    ]
     for c in res['configs']:
         h = c['h20']
-        L.append(f'| {c["name"]} | ' + ' | '.join(_f(h['ic_by_regime'].get(s)) for s in states) + ' | ' + ' | '.join(_p(h['top_excess_by_regime'].get(s)) for s in states) + ' |')
-    L += ['', '## 5. 状态标签是否有区分度（20日超额，相对同日样本均值）', '', '| 方案 | 动量成立 | 强势·等回踩 | 等待确认 | 趋势破坏 | 每日新进强势 |', '|---|---|---|---|---|---|']
+        L.append(
+            f'| {c["name"]} | '
+            + ' | '.join(_f(h['ic_by_regime'].get(s)) for s in states)
+            + ' | '
+            + ' | '.join(_p(h['top_excess_by_regime'].get(s)) for s in states)
+            + ' |'
+        )
+    L += [
+        '',
+        '## 5. 状态标签是否有区分度（20日超额，相对同日样本均值）',
+        '',
+        '| 方案 | 动量成立 | 强势·等回踩 | 等待确认 | 趋势破坏 | 每日新进强势 |',
+        '|---|---|---|---|---|---|',
+    ]
     for c in res['configs']:
         s = c['setups']
-        L.append(f'| {c["name"]} | ' + ' | '.join(f'{_p(s[k]["excess20"])}（{s[k]["share"]:.0%}）' for k in ('Momentum', 'Strong / wait pullback', 'Pullback watch', 'Avoid / broken')) + f' | {c["strong_entries_per_day"]:.2f} |')
+        L.append(
+            f'| {c["name"]} | '
+            + ' | '.join(
+                f'{_p(s[k]["excess20"])}（{s[k]["share"]:.0%}）'
+                for k in ('Momentum', 'Strong / wait pullback', 'Pullback watch', 'Avoid / broken')
+            )
+            + f' | {c["strong_entries_per_day"]:.2f} |'
+        )
     rule = res.get('rule')
     if rule:
-        L += ['', f'## 6. 周度清单规则（{rule["rule"]}，{rule["start"]} ~ {rule["end"]}，收盘出信号、次日开盘成交，单边成本{rule["cost"]:.1%}）', '',
-              '| | 年化 | 年化波动 | 夏普 | 最大回撤 |', '|---|---|---|---|---|']
-        for name, k in (('周度清单（距250日高点前5）', 'strategy'), ('沪深300ETF', 'benchmark'), ('权益ETF等权', 'equal_weight')):
+        L += [
+            '',
+            f'## 6. 周度清单规则（{rule["rule"]}，{rule["start"]} ~ {rule["end"]}，收盘出信号、次日开盘成交，单边成本{rule["cost"]:.1%}）',
+            '',
+            '| | 年化 | 年化波动 | 夏普 | 最大回撤 |',
+            '|---|---|---|---|---|',
+        ]
+        for name, k in (
+            ('周度清单（距250日高点前5）', 'strategy'),
+            ('沪深300ETF', 'benchmark'),
+            ('权益ETF等权', 'equal_weight'),
+        ):
             x = rule[k]
-            L.append(f'| {name} | {_p(x["cagr"], 1)} | {_p(x["vol"], 1).lstrip("+")} | {_f(x["sharpe"], 2)} | {_p(x["mdd"], 1)} |')
+            L.append(
+                f'| {name} | {_p(x["cagr"], 1)} | {_p(x["vol"], 1).lstrip("+")} | {_f(x["sharpe"], 2)} | {_p(x["mdd"], 1)} |'
+            )
         ys = sorted(rule['by_year']['strategy'])
         L += ['', '| 年份 | ' + ' | '.join(map(str, ys)) + ' |', '|---|' + '---|' * len(ys)]
         for name, k in (('周度清单', 'strategy'), ('沪深300ETF', 'benchmark'), ('等权', 'equal_weight')):
@@ -385,45 +549,86 @@ def report(res, label='同花顺前复权日线'):
         rnd = rule.get('random')
         L += ['', f'- 年换手约 {rule["turnover"]:.0f} 倍。']
         if rnd:
-            L.append(f'- 同一候选池随机选5只、同样每周调仓、次日开盘成交和成本，{rnd["runs"]} 次模拟：年化中位数 {_p(rnd["median"], 1)}，95分位 {_p(rnd["p95"], 1)}；本规则超过 {rnd["beaten"]:.0%} 的随机组合。随机组合几乎每周全换，成本拖累比本规则大，这一项只作参考。')
+            L.append(
+                f'- 同一候选池随机选5只、同样每周调仓、次日开盘成交和成本，{rnd["runs"]} 次模拟：年化中位数 {_p(rnd["median"], 1)}，95分位 {_p(rnd["p95"], 1)}；本规则超过 {rnd["beaten"]:.0%} 的随机组合。随机组合几乎每周全换，成本拖累比本规则大，这一项只作参考。'
+            )
         if rule.get('legacy'):
-            L.append(f'- 原规则（不跳过最近5日）同口径：年化 {_p(rule["legacy"]["cagr"], 1)}，最大回撤 {_p(rule["legacy"]["mdd"], 1)}。')
+            L.append(
+                f'- 原规则（不跳过最近5日）同口径：年化 {_p(rule["legacy"]["cagr"], 1)}，最大回撤 {_p(rule["legacy"]["mdd"], 1)}。'
+            )
         rob = rule.get('robustness')
         if rob:
             L += ['', '### 6.1 交易成本敏感性（单边）', '', '| 单边成本 | 年化 | 最大回撤 |', '|---|---|---|']
             L += [f'| {c["cost"]:.1%} | {_p(c["cagr"], 1)} | {_p(c["mdd"], 1)} |' for c in rob['costs']]
-            L += ['', f'年换手约 {rule["turnover"]:.0f} 倍：单边成本每增加0.1%，年化约少 {rule["turnover"] * 0.1:.1f} 个百分点。跨境ETF开盘时的溢价和冲击成本可能高于国内宽基。']
+            L += [
+                '',
+                f'年换手约 {rule["turnover"]:.0f} 倍：单边成本每增加0.1%，年化约少 {rule["turnover"] * 0.1:.1f} 个百分点。跨境ETF开盘时的溢价和冲击成本可能高于国内宽基。',
+            ]
             tops = list(GRID_TOP)
-            L += ['', '### 6.2 参数网格（年化；行=跳过最近N日，列=前N名）', '', '| 跳过 | ' + ' | '.join(f'前{n}' for n in tops) + ' |', '|---|' + '---|' * len(tops)]
+            L += [
+                '',
+                '### 6.2 参数网格（年化；行=跳过最近N日，列=前N名）',
+                '',
+                '| 跳过 | ' + ' | '.join(f'前{n}' for n in tops) + ' |',
+                '|---|' + '---|' * len(tops),
+            ]
             cell = {(g['skip'], g['top']): g for g in rob['grid']}
             for k in GRID_SKIP:
-                L.append(f'| {k}日 | ' + ' | '.join((f'**{_p(cell[(k, n)]["cagr"], 1)}**' if cell[(k, n)]['current'] else _p(cell[(k, n)]['cagr'], 1)) if (k, n) in cell else '—' for n in tops) + ' |')
+                L.append(
+                    f'| {k}日 | '
+                    + ' | '.join(
+                        (
+                            f'**{_p(cell[(k, n)]["cagr"], 1)}**'
+                            if cell[(k, n)]['current']
+                            else _p(cell[(k, n)]['cagr'], 1)
+                        )
+                        if (k, n) in cell
+                        else '—'
+                        for n in tops
+                    )
+                    + ' |'
+                )
             if rob['grid_range']:
                 L += ['', f'网格内年化 {_p(rob["grid_range"][0], 1)} ~ {_p(rob["grid_range"][1], 1)}，粗体为当前规则。']
             sub = rob.get('subsample')
             if sub:
-                L += ['', f'### 6.3 观察池抽样（每次随机去掉 {sub["drop"]:.0%} 的权益ETF，{sub["runs"]} 次）', '',
-                      f'- 年化：5分位 {_p(sub["cagr_p5"], 1)}，中位数 {_p(sub["cagr_median"], 1)}，95分位 {_p(sub["cagr_p95"], 1)}',
-                      f'- 相对同一抽样池等权的超额：5分位 {_p(sub["excess_p5"], 1)}，中位数 {_p(sub["excess_median"], 1)}；{sub["beats_equal_weight"]:.0%} 的抽样跑赢等权',
-                      '- 观察池是事后挑选的；抽样只能说明结果对个别ETF的依赖程度，不能消除“挑选本身”带来的偏差。']
+                L += [
+                    '',
+                    f'### 6.3 观察池抽样（每次随机去掉 {sub["drop"]:.0%} 的权益ETF，{sub["runs"]} 次）',
+                    '',
+                    f'- 年化：5分位 {_p(sub["cagr_p5"], 1)}，中位数 {_p(sub["cagr_median"], 1)}，95分位 {_p(sub["cagr_p95"], 1)}',
+                    f'- 相对同一抽样池等权的超额：5分位 {_p(sub["excess_p5"], 1)}，中位数 {_p(sub["excess_median"], 1)}；{sub["beats_equal_weight"]:.0%} 的抽样跑赢等权',
+                    '- 观察池是事后挑选的；抽样只能说明结果对个别ETF的依赖程度，不能消除“挑选本身”带来的偏差。',
+                ]
             d = rob.get('deflated')
             if d:
-                L += ['', '### 6.4 多重检验校正（Deflated Sharpe Ratio）', '',
-                      f'- 年化夏普 {_f(d["sr_annual"], 2)}（不扣无风险利率，因此略高于上表）；假设先后试过 {d["trials"]} 种做法、都没有真实优势，其中最好的一种预期也能达到年化夏普约 {_f(d["sr0_annual"], 2)}（试验间夏普离散度用 {d["grid"]} 个参数组合估计）。',
-                      f'- 真实夏普 > 0 的概率（PSR）{d["psr"]:.0%}；扣除多重检验后真实夏普高于上述门槛的概率（DSR）{d["dsr"]:.0%}。DSR 低于 95% 说明不能排除结果来自反复试验。',
-                      f'- 日收益偏度 {_f(d["skew"], 2)}、峰度 {d["kurt"]:.1f}，样本 {d["n"]} 个交易日。网格内的方案高度相关，离散度可能被低估，DSR 偏乐观。']
+                L += [
+                    '',
+                    '### 6.4 多重检验校正（Deflated Sharpe Ratio）',
+                    '',
+                    f'- 年化夏普 {_f(d["sr_annual"], 2)}（不扣无风险利率，因此略高于上表）；假设先后试过 {d["trials"]} 种做法、都没有真实优势，其中最好的一种预期也能达到年化夏普约 {_f(d["sr0_annual"], 2)}（试验间夏普离散度用 {d["grid"]} 个参数组合估计）。',
+                    f'- 真实夏普 > 0 的概率（PSR）{d["psr"]:.0%}；扣除多重检验后真实夏普高于上述门槛的概率（DSR）{d["dsr"]:.0%}。DSR 低于 95% 说明不能排除结果来自反复试验。',
+                    f'- 日收益偏度 {_f(d["skew"], 2)}、峰度 {d["kurt"]:.1f}，样本 {d["n"]} 个交易日。网格内的方案高度相关，离散度可能被低估，DSR 偏乐观。',
+                ]
         L += ['', '- 规则在 2026-11-21 根据本数据选定，样本内结果偏乐观；以页面上自 2026-11-20 起的纸面跟踪为准。']
     L += ['', '## 7. 近250日日收益相关性 ≥ 0.90 的组合（用于核对 universe.CLUSTERS）', '']
     L += [f'- {a} / {b}：{r:.3f}' for a, b, r in res['high_corr_pairs']] or ['- 无']
-    L += ['', '## 怎么读', '',
-          '- **Rank IC**：当日评分排名与之后20日收益排名的相关系数。A股行业动量通常在 0.02–0.08 之间，t值 > 2 才算显著。',
-          '- **t值**按不重叠窗口计算（20日每20天取一个点），避免重叠收益夸大显著性。',
-          '- **Q5−Q1**：评分最高一档减最低一档的平均20日收益。**前10超额**：前10名平均收益减样本均值。',
-          '- **结论**：20日 IC、Q5−Q1、前10超额同时变好，且至少60%年份 IC 更高，才算“改善”。',
-          '', '## 局限', '',
-          '- 观察池是今天挑选的，含事后选择偏差；新上市ETF满121日后才进入样本。',
-          '- 前复权价格只用于计算收益，不影响结论；未计交易成本、冲击成本和跨境ETF溢价变化。',
-          '- 5年只覆盖少数几轮牛熊，分年度和分状态结果的样本更小，需结合判断。', '']
+    L += [
+        '',
+        '## 怎么读',
+        '',
+        '- **Rank IC**：当日评分排名与之后20日收益排名的相关系数。A股行业动量通常在 0.02–0.08 之间，t值 > 2 才算显著。',
+        '- **t值**按不重叠窗口计算（20日每20天取一个点），避免重叠收益夸大显著性。',
+        '- **Q5−Q1**：评分最高一档减最低一档的平均20日收益。**前10超额**：前10名平均收益减样本均值。',
+        '- **结论**：20日 IC、Q5−Q1、前10超额同时变好，且至少60%年份 IC 更高，才算“改善”。',
+        '',
+        '## 局限',
+        '',
+        '- 观察池是今天挑选的，含事后选择偏差；新上市ETF满121日后才进入样本。',
+        '- 前复权价格只用于计算收益，不影响结论；未计交易成本、冲击成本和跨境ETF溢价变化。',
+        '- 5年只覆盖少数几轮牛熊，分年度和分状态结果的样本更小，需结合判断。',
+        '',
+    ]
     return '\n'.join(L)
 
 
@@ -444,7 +649,9 @@ def main():
     out = ROOT / 'reports'
     out.mkdir(exist_ok=True)
     suffix = '_synthetic' if args.synthetic else ''
-    (out / f'backtest{suffix}.json').write_text(json.dumps(res, ensure_ascii=False, indent=1, allow_nan=False, default=str))
+    (out / f'backtest{suffix}.json').write_text(
+        json.dumps(res, ensure_ascii=False, indent=1, allow_nan=False, default=str)
+    )
     (out / f'backtest{suffix}.md').write_text(report(res, label))
     print((out / f'backtest{suffix}.md').read_text())
 

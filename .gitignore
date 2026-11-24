@@ -3,7 +3,6 @@ __pycache__/
 *.pyc
 .venv/
 venv/
-config/tushare_token.txt
 
 
 archive/

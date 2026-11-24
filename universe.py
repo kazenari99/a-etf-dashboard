@@ -1,6 +1,7 @@
 """Production observation universe. Display names are concise, not legal fund names.
 Primary-source checks and scope: docs/UNIVERSE.md.
 """
+
 UNIVERSE_VERSION = '2026-11-v3'
 ETF_GROUPS = {
     '宽基': [
@@ -125,13 +126,19 @@ CASH_ETF = ('511880', '银华日利ETF')
 ADDED = {code: '2026-11-23' for code in ('513120', '513910', '513310', '511090', '511380')}
 
 # Asset class drives the v2 split between relative ranking (equity) and absolute momentum.
-ASSET_CLASS = {code: {'商品': 'commodity', '债券': 'bond', '可转债': 'convertible'}.get(group, 'equity')
-               for group, items in ETF_GROUPS.items() for code, _ in items}
+ASSET_CLASS = {
+    code: {'商品': 'commodity', '债券': 'bond', '可转债': 'convertible'}.get(group, 'equity')
+    for group, items in ETF_GROUPS.items()
+    for code, _ in items
+}
 ASSET_CLASS[CASH_ETF[0]] = 'cash'
 
 # Where the underlying trades. A-share breadth statistics use 境内 equity only.
-MARKET = {code: {'港股': '港股', '海外': '海外'}.get(group, '境内')
-          for group, items in ETF_GROUPS.items() for code, _ in items}
+MARKET = {
+    code: {'港股': '港股', '海外': '海外'}.get(group, '境内')
+    for group, items in ETF_GROUPS.items()
+    for code, _ in items
+}
 MARKET[CASH_ETF[0]] = '境内'
 
 # Cross-border ETFs trade at a premium/discount to NAV; the page shows it next to momentum.

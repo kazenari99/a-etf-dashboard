@@ -8,6 +8,7 @@ same weeks with today's code is kept as a check (`mismatches`), not as the sourc
 
 track/ledger.json is committed by the publishing workflow after each run.
 """
+
 from __future__ import annotations
 
 import datetime as dt
@@ -61,17 +62,23 @@ def update(data, panel, asset_class, latest, universe_version, now=None, sig=Non
     for d in strategy.week_ends(list(panel['close'].index)):
         if d < strategy.TRACK_START or d > latest or d in have:
             continue
-        ranked = strategy.ranking(panel, asset_class, d, sig)[:strategy.TOP_N]
+        ranked = strategy.ranking(panel, asset_class, d, sig)[: strategy.TOP_N]
         if not ranked:
             continue
         trade = next_session(d)
-        data['entries'].append(dict(
-            signal_date=d, trade_date=trade, rule=strategy.RULE_VERSION, universe_version=universe_version,
-            picks=[dict(ticker=c, signal=round(s, 6)) for c, s, _ in ranked],
-            recorded_at=now.isoformat(timespec='seconds'),
-            # True when the entry was first written after the trade-date open, i.e. the
-            # record could not have been acted on as written (e.g. the pipeline was down).
-            recorded_after_trade=now >= dt.datetime.combine(dt.date.fromisoformat(trade), OPEN, TZ)))
+        data['entries'].append(
+            dict(
+                signal_date=d,
+                trade_date=trade,
+                rule=strategy.RULE_VERSION,
+                universe_version=universe_version,
+                picks=[dict(ticker=c, signal=round(s, 6)) for c, s, _ in ranked],
+                recorded_at=now.isoformat(timespec='seconds'),
+                # True when the entry was first written after the trade-date open, i.e. the
+                # record could not have been acted on as written (e.g. the pipeline was down).
+                recorded_after_trade=now >= dt.datetime.combine(dt.date.fromisoformat(trade), OPEN, TZ),
+            )
+        )
         added.append(d)
     data['entries'].sort(key=lambda e: e['signal_date'])
     return added

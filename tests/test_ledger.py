@@ -1,15 +1,16 @@
 import copy
 import datetime as dt
 import json
-from pathlib import Path
 import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
+
+from test_strategy import synthetic_panel
 
 import ledger
 import radar
 import strategy
-from test_strategy import synthetic_panel
 
 TZ = ledger.TZ
 
@@ -21,7 +22,8 @@ class LedgerTests(unittest.TestCase):
         self.ends = strategy.week_ends(self.cal)
         self.start = self.ends[-6]
         p = patch.object(strategy, 'TRACK_START', self.start)
-        p.start(); self.addCleanup(p.stop)
+        p.start()
+        self.addCleanup(p.stop)
 
     def test_appends_each_week_once_and_never_edits(self):
         book = ledger.empty()
