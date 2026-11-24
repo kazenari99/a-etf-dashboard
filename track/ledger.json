@@ -1,0 +1,35 @@
+{
+ "note": "Append-only weekly picks; see ledger.py. Do not edit past entries.",
+ "entries": [
+  {
+   "signal_date": "2026-11-20",
+   "trade_date": "2026-11-23",
+   "rule": "near-high-250-skip5-top5-weekly-v2",
+   "universe_version": "2026-11-v3",
+   "picks": [
+    {
+     "ticker": "512800",
+     "signal": 0.0
+    },
+    {
+     "ticker": "512890",
+     "signal": 0.0
+    },
+    {
+     "ticker": "510880",
+     "signal": -0.035724
+    },
+    {
+     "ticker": "513500",
+     "signal": -0.041397
+    },
+    {
+     "ticker": "515080",
+     "signal": -0.04887
+    }
+   ],
+   "recorded_at": "2026-11-24T15:50:02+08:00",
+   "recorded_after_trade": true
+  }
+ ]
+}
