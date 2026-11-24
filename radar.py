@@ -1,261 +1,499 @@
 """A-share companion to the US ETF Momentum Radar; Tonghuashun only."""
+
 from __future__ import annotations
+
 import argparse
 import datetime as dt
 import json
 import math
 import os
 import random
-from pathlib import Path
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from pathlib import Path
+
 import pandas as pd
+
+import ledger
 import model
 import strategy
 import trading_calendar
-from universe import ADDED, ASSET_CLASS, CASH_ETF, CLUSTER_OF, CLUSTERS, CROSS_BORDER, ETF_GROUPS, MARKET, UNIVERSE_VERSION
+from universe import (
+    ADDED,
+    ASSET_CLASS,
+    CASH_ETF,
+    CLUSTER_OF,
+    CLUSTERS,
+    CROSS_BORDER,
+    ETF_GROUPS,
+    MARKET,
+    UNIVERSE_VERSION,
+)
 
-ROOT=Path(__file__).resolve().parent
-TZ=dt.timezone(dt.timedelta(hours=8))
-CACHE=ROOT/'data_cache/hithink_klines.json'
-BASE='https://fuyao.aicubes.cn'
-BENCHMARK='510300'
+ROOT = Path(__file__).resolve().parent
+TZ = dt.timezone(dt.timedelta(hours=8))
+CACHE = ROOT / 'data_cache/hithink_klines.json'
+BASE = 'https://fuyao.aicubes.cn'
+BENCHMARK = '510300'
 # Broad indices shown as market context (not a timing signal: index-trend timing lost money in the backtest).
-INDEX_ETFS=[('510050','上证50'),('510300','沪深300'),('510500','中证500'),('512100','中证1000'),('159915','创业板'),('588000','科创50')]
+INDEX_ETFS = [
+    ('510050', '上证50'),
+    ('510300', '沪深300'),
+    ('510500', '中证500'),
+    ('512100', '中证1000'),
+    ('159915', '创业板'),
+    ('588000', '科创50'),
+]
 # Percentile scores are only meaningful when nearly the whole universe is ranked together.
-MIN_COVERAGE=0.9
-AUTH_API_CODES=(2001,2003)
+MIN_COVERAGE = 0.9
+# Published copies read back for the daily comparison; PUBLISHED_URLS (comma-separated) overrides.
+PUBLISHED_URLS = ('https://jade-a.pages.dev/', 'https://kazenari99.github.io/a-etf-dashboard/')
+AUTH_API_CODES = (2001, 2003)
+
 
 def api_key():
-    value=os.environ.get('HITHINK_API_KEY','').strip()
-    path=ROOT/'config/hithink_api_key.txt'
-    if not value and path.exists():value=path.read_text().strip()
-    if not value:raise RuntimeError('缺少 HITHINK_API_KEY；请配置本地文件或 GitHub Actions Secret。')
+    value = os.environ.get('HITHINK_API_KEY', '').strip()
+    path = ROOT / 'config/hithink_api_key.txt'
+    if not value and path.exists():
+        value = path.read_text().strip()
+    if not value:
+        raise RuntimeError('缺少 HITHINK_API_KEY；请配置本地文件或 GitHub Actions Secret。')
     return value
 
+
 def completed_cutoff(now=None):
-    now=now or dt.datetime.now(TZ)
-    day=now.date()
-    if now.time()<dt.time(15,15):day-=dt.timedelta(days=1)
+    now = now or dt.datetime.now(TZ)
+    day = now.date()
+    if now.time() < dt.time(15, 15):
+        day -= dt.timedelta(days=1)
     return trading_calendar.previous_trading_day(day)
 
+
 class APIError(RuntimeError):
-    def __init__(self,code,request_id=None):
-        self.code=code
+    def __init__(self, code, request_id=None):
+        self.code = code
         super().__init__(f'同花顺业务错误 {code}；request_id={request_id or "未提供"}')
+
 
 class AuthError(RuntimeError):
     """Credential rejected; abort the whole run instead of degrading to cache."""
 
-def thscode_of(code):
-    return code+('.SH' if code.startswith('5') else '.SZ')
 
-def api_get(path,params,key,attempts=4):
+def thscode_of(code):
+    return code + ('.SH' if code.startswith('5') else '.SZ')
+
+
+def api_get(path, params, key, attempts=4):
     """GET with bounded exponential backoff + jitter; auth failures abort immediately."""
-    req=urllib.request.Request(BASE+path+'?'+urllib.parse.urlencode(params),headers={'X-api-key':key,'User-Agent':'ETF-Momentum-Radar/1.0'})
+    req = urllib.request.Request(
+        BASE + path + '?' + urllib.parse.urlencode(params),
+        headers={'X-api-key': key, 'User-Agent': 'ETF-Momentum-Radar/1.0'},
+    )
     for attempt in range(attempts):
-        last=attempt==attempts-1
+        last = attempt == attempts - 1
         try:
-            with urllib.request.urlopen(req,timeout=25) as response:p=json.load(response)
-            if p.get('code')!=0:raise APIError(p.get('code'),p.get('request_id'))
+            with urllib.request.urlopen(req, timeout=25) as response:
+                p = json.load(response)
+            if p.get('code') != 0:
+                raise APIError(p.get('code'), p.get('request_id'))
             return p
         except APIError as exc:
-            if exc.code not in (4001,5001,5002,5003) or last:raise
+            if exc.code not in (4001, 5001, 5002, 5003) or last:
+                raise
         except urllib.error.HTTPError as exc:
-            if exc.code in (401,403):raise AuthError(f'同花顺认证失败 HTTP {exc.code}；请检查 HITHINK_API_KEY。') from None
-            if exc.code not in (429,500,502,503,504) or last:raise RuntimeError(f'HTTP {exc.code}') from None
+            if exc.code in (401, 403):
+                raise AuthError(f'同花顺认证失败 HTTP {exc.code}；请检查 HITHINK_API_KEY。') from None
+            if exc.code not in (429, 500, 502, 503, 504) or last:
+                raise RuntimeError(f'HTTP {exc.code}') from None
         except json.JSONDecodeError:
-            if last:raise RuntimeError('同花顺返回内容无法解析') from None
-        except (urllib.error.URLError,TimeoutError):
-            if last:raise RuntimeError('同花顺连接超时或网络不可用') from None
-        time.sleep(2**attempt+random.uniform(0,.5))
+            if last:
+                raise RuntimeError('同花顺返回内容无法解析') from None
+        except (urllib.error.URLError, TimeoutError):
+            if last:
+                raise RuntimeError('同花顺连接超时或网络不可用') from None
+        time.sleep(2**attempt + random.uniform(0, 0.5))
     raise RuntimeError('同花顺请求失败')
+
 
 def fetch_days():
     """Calendar days of history: 250-session high lookback plus the whole paper track."""
-    return min(1820,max(560,(completed_cutoff()-dt.date.fromisoformat(strategy.TRACK_START)).days+560))
+    return min(1820, max(560, (completed_cutoff() - dt.date.fromisoformat(strategy.TRACK_START)).days + 560))
 
-def request_history(code,key,days=None,min_bars=121):
-    days=days or fetch_days()
-    cutoff=completed_cutoff()
-    start=dt.datetime.combine(cutoff-dt.timedelta(days=days),dt.time(),TZ)
-    end=dt.datetime.combine(cutoff,dt.time(23,59,59),TZ)
-    thscode=thscode_of(code)
-    p=api_get('/api/fund/market/historical',dict(thscode=thscode,interval='1d',start=int(start.timestamp()*1000),end=int(end.timestamp()*1000)),key)
-    data=p.get('data') or {}
-    if data.get('thscode')!=thscode:raise ValueError('接口标的与请求不一致')
-    rows=normalize(data.get('item') or [],cutoff)
-    if len(rows)<min_bars:raise ValueError(f'历史不足{min_bars}根：{len(rows)}')
-    return dict(rows=rows,source='同花顺金融API',adjustment='qfq',fetched_at=dt.datetime.now(TZ).isoformat(timespec='seconds'),request_id=p.get('request_id'),cached=False)
 
-def request_nav(code,key):
+def request_history(code, key, days=None, min_bars=121):
+    days = days or fetch_days()
+    cutoff = completed_cutoff()
+    start = dt.datetime.combine(cutoff - dt.timedelta(days=days), dt.time(), TZ)
+    end = dt.datetime.combine(cutoff, dt.time(23, 59, 59), TZ)
+    thscode = thscode_of(code)
+    p = api_get(
+        '/api/fund/market/historical',
+        dict(thscode=thscode, interval='1d', start=int(start.timestamp() * 1000), end=int(end.timestamp() * 1000)),
+        key,
+    )
+    data = p.get('data') or {}
+    if data.get('thscode') != thscode:
+        raise ValueError('接口标的与请求不一致')
+    rows = normalize(data.get('item') or [], cutoff)
+    if len(rows) < min_bars:
+        raise ValueError(f'历史不足{min_bars}根：{len(rows)}')
+    return dict(
+        rows=rows,
+        source='同花顺金融API',
+        adjustment='qfq',
+        fetched_at=dt.datetime.now(TZ).isoformat(timespec='seconds'),
+        request_id=p.get('request_id'),
+        cached=False,
+    )
+
+
+def request_nav(code, key):
     """Latest published unit NAV (cross-border NAVs lag the close by 1-2 sessions)."""
-    p=api_get('/api/fund/performance/nav',dict(thscode=thscode_of(code),range='month',nav_type='unit'),key)
-    items=[i for i in (p.get('data') or {}).get('item') or [] if isinstance(i.get('nav_date'),(int,float)) and isinstance(i.get('unit_nav'),(int,float)) and i['unit_nav']>0]
-    if not items:raise ValueError('无净值数据')
-    item=max(items,key=lambda i:i['nav_date'])
-    return dict(date=dt.datetime.fromtimestamp(item['nav_date']/1000,TZ).date().isoformat(),unit_nav=float(item['unit_nav']))
+    p = api_get('/api/fund/performance/nav', dict(thscode=thscode_of(code), range='month', nav_type='unit'), key)
+    items = [
+        i
+        for i in (p.get('data') or {}).get('item') or []
+        if isinstance(i.get('nav_date'), (int, float))
+        and isinstance(i.get('unit_nav'), (int, float))
+        and i['unit_nav'] > 0
+    ]
+    if not items:
+        raise ValueError('无净值数据')
+    item = max(items, key=lambda i: i['nav_date'])
+    return dict(
+        date=dt.datetime.fromtimestamp(item['nav_date'] / 1000, TZ).date().isoformat(), unit_nav=float(item['unit_nav'])
+    )
 
-def normalize(items,cutoff):
-    rows={}
+
+def normalize(items, cutoff):
+    rows = {}
     for item in items:
-        timestamp=item.get('date_ms')
-        if not isinstance(timestamp,(int,float)) or not math.isfinite(timestamp):continue
-        day=dt.datetime.fromtimestamp(timestamp/1000,TZ).date()
-        if day>cutoff:continue
-        r={'date':day.isoformat()}
-        for key in ('open','high','low','close'):r[key]=item.get(key+'_price')
-        if not all(isinstance(r[k],(int,float)) and math.isfinite(r[k]) and r[k]>0 for k in ('open','high','low','close')):continue
-        if r['high']<max(r['close'],r['open'],r['low']) or r['low']>min(r['close'],r['open']):continue
-        r.update(volume=item.get('volume'),turnover=item.get('turnover'))
-        rows[r['date']]=r
+        timestamp = item.get('date_ms')
+        if not isinstance(timestamp, (int, float)) or not math.isfinite(timestamp):
+            continue
+        day = dt.datetime.fromtimestamp(timestamp / 1000, TZ).date()
+        if day > cutoff:
+            continue
+        r = {'date': day.isoformat()}
+        for key in ('open', 'high', 'low', 'close'):
+            r[key] = item.get(key + '_price')
+        if not all(
+            isinstance(r[k], (int, float)) and math.isfinite(r[k]) and r[k] > 0
+            for k in ('open', 'high', 'low', 'close')
+        ):
+            continue
+        if r['high'] < max(r['close'], r['open'], r['low']) or r['low'] > min(r['close'], r['open']):
+            continue
+        r.update(volume=item.get('volume'), turnover=item.get('turnover'))
+        rows[r['date']] = r
     return [rows[k] for k in sorted(rows)]
 
-def premium(bars,nav):
+
+def premium(bars, nav):
     """Close on the NAV date over unit NAV. qfq equals the raw close unless a distribution
     happened after that date, which the 1-2 session NAV lag makes negligible."""
-    if not nav or not bars:return None
-    close=next((b['close'] for b in reversed(bars) if b['date']==nav.get('date')),None)
-    return close/nav['unit_nav']-1 if close else None
+    if not nav or not bars:
+        return None
+    close = next((b['close'] for b in reversed(bars) if b['date'] == nav.get('date')), None)
+    return close / nav['unit_nav'] - 1 if close else None
+
 
 def _num(v):
-    v=float(v)
+    v = float(v)
     return v if math.isfinite(v) else None
 
-def analyze_full(entries):
-    """Rows for every universe ETF, the latest session and the market regime.
+
+def prepare_panel(entries):
+    """Benchmark-calendar panel with production eligibility; (None, None) without a benchmark."""
+    benchmark = entries.get(BENCHMARK, {}).get('rows', [])
+    if not benchmark:
+        return None, None
+    latest = benchmark[-1]['date']
+    panel = model.build_panel(entries, BENCHMARK)
+    # Production also requires the ETF's own last bar to be the benchmark's session.
+    for t, e in entries.items():
+        bars = e.get('rows') or []
+        if not bars or bars[-1]['date'] != latest:
+            panel['eligible'].loc[latest, t] = False
+    # The money-market ETF only supplies the cash hurdle; it is never ranked or picked.
+    cash = CASH_ETF[0]
+    if cash in panel['eligible']:
+        panel['eligible'][cash] = False
+    return panel, latest
+
+
+def market_regime(panel, latest):
+    cash = CASH_ETF[0]
+    state = model.regime(panel, ASSET_CLASS, market=MARKET, cash=cash).loc[latest]
+    has_cash = cash in panel['r120'] and pd.notna(panel['r120'].at[latest, cash])
+    return dict(
+        state=state['state'],
+        breadth60=_num(state['breadth60']),
+        bench_r120=_num(state['bench_r120']),
+        hurdle=float(state['hurdle']),
+        hurdle_source=f'{CASH_ETF[1]}（{cash}）120日收益' if has_cash else '年化1.5%固定门槛',
+        indices=index_overview(panel, latest),
+    )
+
+
+def etf_row(group, code, name, entry, panel, latest, scored):
+    """One table row; `scored` holds the PROD score/setup, absolute momentum and near-high panels."""
+    bars = entry.get('rows', [])
+    r = dict(
+        ticker=code,
+        name=name,
+        group=group,
+        asset_class=ASSET_CLASS.get(code, 'equity'),
+        market=MARKET.get(code, '境内'),
+        added=ADDED.get(code),
+        cluster=CLUSTER_OF.get(code),
+        date=bars[-1]['date'] if bars else None,
+        source=entry.get('source', '同花顺金融API'),
+        cached=entry.get('cached', False),
+        setup='Data unavailable',
+        eligible=False,
+        score=None,
+    )
+    if code in CROSS_BORDER:
+        r['premium'] = premium(bars, entry.get('nav'))
+        r['nav_date'] = (entry.get('nav') or {}).get('date')
+    if panel is None or code not in panel['eligible'] or not panel['eligible'].at[latest, code]:
+        return r
+
+    def g(k):
+        return float(panel[k].at[latest, code])
+
+    last, atr, ema20 = g('close'), g('atr14'), g('ema20')
+    for n in (20, 60, 120):
+        r[f'r{n}'] = g(f'r{n}')
+        r[f'rs{n}'] = r[f'r{n}'] - float(panel[f'r{n}'].at[latest, BENCHMARK])
+    stop = min(ema20, g('low10')) - 0.5 * atr
+    high20 = g('high20_prev')
+    amounts = pd.to_numeric(pd.Series([b.get('turnover') for b in bars[-20:]]), errors='coerce')
+    prod, absolute, near = scored
+    r.update(
+        close=last,
+        ema20=ema20,
+        sma50=g('sma50'),
+        sma120=g('sma120'),
+        atr14=atr,
+        atr_pct=atr / last,
+        dist_ema_atr=g('dist_ema_atr'),
+        vol20_ann=g('vol20'),
+        from_high120=g('from_high120'),
+        high20_prev=high20,
+        breakout_trigger=high20 + 0.1 * atr,
+        pullback_low=ema20 - 0.5 * atr,
+        pullback_high=ema20 + 0.5 * atr,
+        stop_ref=stop,
+        stop_pct=stop / last - 1,
+        adtv20=float(amounts.mean()) if len(amounts) == 20 and amounts.notna().all() else None,
+        trend_aligned=bool(panel['trend_aligned'].at[latest, code]),
+        eligible=True,
+        setup=prod['setup'].at[latest, code],
+        score=_num(prod['score'].at[latest, code]),
+        abs_momentum=bool(absolute.at[latest, code]),
+        near_high250=_num(near.at[latest, code]),
+    )
+    if r['asset_class'] != 'equity':
+        # Not ranked against equities: label by absolute momentum instead.
+        r['score'] = None
+        r['setup'] = 'Absolute up' if r['abs_momentum'] else 'Absolute down'
+    return r
+
+
+def analyze_full(entries, book=None):
+    """Rows for every universe ETF, the latest session, the market regime and the weekly picks.
 
     The published score is model.PROD (V1 without the overheat penalty, with label
-    hysteresis); see model.py and backtest.py for why.
+    hysteresis); see model.py and backtest.py for why. `book` is the picks ledger
+    (ledger.load()); it is updated in place and the paper track is built from it.
     """
-    universe=[(group,code,name) for group,items in ETF_GROUPS.items() for code,name in items]
-    benchmark=entries.get(BENCHMARK,{}).get('rows',[])
-    latest=benchmark[-1]['date'] if benchmark else None
-    panel=model.build_panel(entries,BENCHMARK) if latest else None
+    panel, latest = prepare_panel(entries)
+    scored = regime = None
     if panel is not None:
-        # Production also requires the ETF's own last bar to be the benchmark's session.
-        for t,e in entries.items():
-            bars=e.get('rows') or []
-            if not bars or bars[-1]['date']!=latest:panel['eligible'].loc[latest,t]=False
-        cash=CASH_ETF[0]
-        # The money-market ETF only supplies the cash hurdle; it is never ranked or picked.
-        if cash in panel['eligible']:panel['eligible'][cash]=False
-        prod=model.score_panel(panel,model.PROD,ASSET_CLASS,CLUSTERS)
-        absolute=model.absolute_momentum(panel,cash=cash)
-        near=strategy.near_high(panel)
-        state=model.regime(panel,ASSET_CLASS,market=MARKET,cash=cash).loc[latest]
-        has_cash=cash in panel['r120'] and pd.notna(panel['r120'].at[latest,cash])
-        regime=dict(state=state['state'],breadth60=_num(state['breadth60']),bench_r120=_num(state['bench_r120']),hurdle=float(state['hurdle']),
-                    hurdle_source=f'{CASH_ETF[1]}（{cash}）120日收益' if has_cash else '年化1.5%固定门槛',indices=index_overview(panel,latest))
-    else:
-        regime=None
-    rows=[]
-    for group,code,name in universe:
-        e=entries.get(code,{})
-        bars=e.get('rows',[])
-        r=dict(ticker=code,name=name,group=group,asset_class=ASSET_CLASS.get(code,'equity'),market=MARKET.get(code,'境内'),added=ADDED.get(code),cluster=CLUSTER_OF.get(code),date=bars[-1]['date'] if bars else None,source=e.get('source','同花顺金融API'),cached=e.get('cached',False),setup='Data unavailable',eligible=False,score=None)
-        if code in CROSS_BORDER:
-            r['premium']=premium(bars,e.get('nav'));r['nav_date']=(e.get('nav') or {}).get('date')
-        if panel is None or code not in panel['eligible'] or not panel['eligible'].at[latest,code]:
-            rows.append(r);continue
-        g=lambda k:float(panel[k].at[latest,code])
-        last,atr,ema20=g('close'),g('atr14'),g('ema20')
-        for n in (20,60,120):
-            r[f'r{n}']=g(f'r{n}')
-            r[f'rs{n}']=r[f'r{n}']-float(panel[f'r{n}'].at[latest,BENCHMARK])
-        stop=min(ema20,g('low10'))-.5*atr
-        high20=g('high20_prev')
-        amounts=pd.to_numeric(pd.Series([b.get('turnover') for b in bars[-20:]]),errors='coerce')
-        r.update(close=last,ema20=ema20,sma50=g('sma50'),sma120=g('sma120'),atr14=atr,atr_pct=atr/last,dist_ema_atr=g('dist_ema_atr'),vol20_ann=g('vol20'),from_high120=g('from_high120'),high20_prev=high20,breakout_trigger=high20+.1*atr,pullback_low=ema20-.5*atr,pullback_high=ema20+.5*atr,stop_ref=stop,stop_pct=stop/last-1,adtv20=float(amounts.mean()) if len(amounts)==20 and amounts.notna().all() else None,trend_aligned=bool(panel['trend_aligned'].at[latest,code]),eligible=True,
-                 setup=prod['setup'].at[latest,code],score=_num(prod['score'].at[latest,code]),
-                 abs_momentum=bool(absolute.at[latest,code]),near_high250=_num(near.at[latest,code]),
-                 history=[dict(date=b['date'],close=b['close']) for b in bars[-120:]])
-        if r['eligible'] and r['asset_class']!='equity':
-            # Not ranked against equities: label by absolute momentum instead.
-            r['score']=None;r['setup']='Absolute up' if r['abs_momentum'] else 'Absolute down'
-        rows.append(r)
-    rows.sort(key=lambda r:r['score'] if r['score'] is not None else -math.inf,reverse=True)
-    weekly=weekly_summary(panel,latest) if panel is not None else None
-    return rows,latest,regime,weekly
+        prod = model.score_panel(panel, model.PROD, ASSET_CLASS, CLUSTERS)
+        scored = (prod, model.absolute_momentum(panel, cash=CASH_ETF[0]), strategy.near_high(panel))
+        regime = market_regime(panel, latest)
+    rows = [
+        etf_row(group, code, name, entries.get(code, {}), panel, latest, scored)
+        for group, items in ETF_GROUPS.items()
+        for code, name in items
+    ]
+    rows.sort(key=lambda r: r['score'] if r['score'] is not None else -math.inf, reverse=True)
+    weekly = weekly_summary(panel, latest, book) if panel is not None else None
+    return rows, latest, regime, weekly
+
 
 def analyze(entries):
-    rows,latest,regime,_=analyze_full(entries)
-    return rows,latest,regime
+    rows, latest, regime, _ = analyze_full(entries)
+    return rows, latest, regime
 
-def index_overview(panel,latest):
+
+def index_overview(panel, latest):
     """Trend context for the broad-index ETFs: distance to the 250-session high and
     position versus the 50/120/250-session averages."""
-    close=panel['close'];near=strategy.near_high(panel);sma250=close.rolling(250,min_periods=250).mean()
-    out=[]
-    for code,name in INDEX_ETFS:
-        if code not in close or pd.isna(close.at[latest,code]):continue
-        c=float(close.at[latest,code])
-        ma={k:_num(v) for k,v in (('50',panel['sma50'].at[latest,code]),('120',panel['sma120'].at[latest,code]),('250',sma250.at[latest,code]))}
-        above={k:(v is not None and c>v) for k,v in ma.items()}
-        if all(v is not None for v in ma.values()) and c>ma['50']>ma['120'] and c>ma['250']:trend='up'
-        elif all(v is not None for v in ma.values()) and c<ma['50']<ma['120'] and c<ma['250']:trend='down'
-        else:trend='range'
-        out.append(dict(ticker=code,name=name,near_high=_num(near.at[latest,code]),above=above,trend=trend,
-                        r20=_num(panel['r20'].at[latest,code]),r60=_num(panel['r60'].at[latest,code])))
+    close = panel['close']
+    near = strategy.near_high(panel)
+    sma250 = close.rolling(250, min_periods=250).mean()
+    out = []
+    for code, name in INDEX_ETFS:
+        if code not in close or pd.isna(close.at[latest, code]):
+            continue
+        c = float(close.at[latest, code])
+        ma = {
+            k: _num(v)
+            for k, v in (
+                ('50', panel['sma50'].at[latest, code]),
+                ('120', panel['sma120'].at[latest, code]),
+                ('250', sma250.at[latest, code]),
+            )
+        }
+        above = {k: (v is not None and c > v) for k, v in ma.items()}
+        if all(v is not None for v in ma.values()) and c > ma['50'] > ma['120'] and c > ma['250']:
+            trend = 'up'
+        elif all(v is not None for v in ma.values()) and c < ma['50'] < ma['120'] and c < ma['250']:
+            trend = 'down'
+        else:
+            trend = 'range'
+        out.append(
+            dict(
+                ticker=code,
+                name=name,
+                near_high=_num(near.at[latest, code]),
+                above=above,
+                trend=trend,
+                r20=_num(panel['r20'].at[latest, code]),
+                r60=_num(panel['r60'].at[latest, code]),
+            )
+        )
     return out
 
-def weekly_summary(panel,latest):
+
+def weekly_summary(panel, latest, book=None):
     """Weekly picks with the trades they imply, plus the paper track (see strategy.py).
 
     picks: chosen at `rebalance_date` close by the v2 signal, traded at the next open.
-    trades: what that rebalance sells/buys versus the previous week's picks."""
-    cal=list(panel['close'].index)
-    ends=strategy.week_ends(cal)
-    sig=strategy.signal(panel);nh=strategy.near_high(panel)
-    if sig.loc[latest].notna().sum()==0:return None
-    is_end=latest in ends
-    past=[d for d in ends if d<latest]
-    reb=latest if is_end else (past[-1] if past else None)
-    if reb is None:return None
-    prev=[d for d in ends if d<reb]
-    def entry(code,signal_value,r60):
-        return dict(ticker=code,signal=signal_value,near_high=_num(nh.at[latest,code]),r60=_num(panel['r60'].at[latest,code]))
-    current=[entry(*x) for x in strategy.ranking(panel,ASSET_CLASS,reb,sig)[:strategy.TOP_N]]
-    previous=strategy.picks(panel,ASSET_CLASS,prev[-1],sig=sig) if prev else []
-    cur=[x['ticker'] for x in current]
-    nxt=dt.date.fromisoformat(reb)+dt.timedelta(days=1)
-    while not trading_calendar.is_trading_day(nxt):nxt+=dt.timedelta(days=1)
-    out=dict(rule=strategy.RULE_VERSION,top_n=strategy.TOP_N,lookback=strategy.LOOKBACK,skip=strategy.SKIP,cost=strategy.COST,
-             rebalance_date=reb,trade_date=nxt.isoformat(),holding_from='next' if is_end else 'this',picks=current,previous_date=prev[-1] if prev else None,
-             buy=[c for c in cur if c not in previous],sell=[c for c in previous if c not in cur],hold=[c for c in cur if c in previous],
-             provisional=None if is_end else [entry(*x) for x in strategy.ranking(panel,ASSET_CLASS,latest,sig)[:strategy.TOP_N]],
-             track_start=strategy.TRACK_START)
-    out['added'],out['removed']=out['buy'],out['sell']  # kept for older page scripts
-    sim=strategy.simulate(panel,ASSET_CLASS,strategy.TRACK_START,sig=sig)
-    legacy=strategy.simulate(panel,ASSET_CLASS,strategy.TRACK_START,sig=nh)
-    if len(sim['returns']):
-        navs=pd.DataFrame({'s':(1+sim['returns']).cumprod(),'b':(1+sim['benchmark']).cumprod(),'e':(1+sim['equal_weight']).cumprod(),
-                           'l':(1+legacy['returns']).cumprod().reindex(sim['returns'].index)})
-        out['track']=dict(days=len(navs),weeks=len(sim['holdings']),execution='next_open',strategy=strategy.stats(sim['returns']),benchmark=strategy.stats(sim['benchmark']),
-                          equal_weight=strategy.stats(sim['equal_weight']),legacy=dict(rule=strategy.LEGACY_RULE,**strategy.stats(legacy['returns'])),
-                          nav=[dict(date=d,s=round(r.s,5),b=round(r.b,5),e=round(r.e,5)) for d,r in navs.iterrows()],
-                          holdings=[dict(date=d,picks=c) for d,c in sim['holdings'][-12:]])
+    trades: what that rebalance sells/buys versus the previous week's picks.
+    With a ledger, recorded picks win over recomputed ones for past weeks and the track."""
+    cal = list(panel['close'].index)
+    ends = strategy.week_ends(cal)
+    sig = strategy.signal(panel)
+    nh = strategy.near_high(panel)
+    if sig.loc[latest].notna().sum() == 0:
+        return None
+    is_end = latest in ends
+    past = [d for d in ends if d < latest]
+    reb = latest if is_end else (past[-1] if past else None)
+    if reb is None:
+        return None
+    if book is not None:
+        ledger.update(book, panel, ASSET_CLASS, latest, UNIVERSE_VERSION, sig=sig)
+    held = ledger.holdings(book) if book is not None else {}
+    prev = [d for d in ends if d < reb]
+
+    def entry(code, signal_value, r60):
+        known = code in nh.columns  # a recorded pick may have left the universe since
+        return dict(
+            ticker=code,
+            signal=signal_value,
+            near_high=_num(nh.at[latest, code]) if known else None,
+            r60=_num(panel['r60'].at[latest, code]) if known else None,
+        )
+
+    if reb in held:
+        recorded = {p['ticker']: p['signal'] for e in book['entries'] if e['signal_date'] == reb for p in e['picks']}
+        current = [entry(c, recorded[c], None) for c in held[reb]]
     else:
-        out['track']=None
+        current = [entry(*x) for x in strategy.ranking(panel, ASSET_CLASS, reb, sig)[: strategy.TOP_N]]
+    previous = (
+        (held[prev[-1]] if prev and prev[-1] in held else strategy.picks(panel, ASSET_CLASS, prev[-1], sig=sig))
+        if prev
+        else []
+    )
+    cur = [x['ticker'] for x in current]
+    nxt = dt.date.fromisoformat(reb) + dt.timedelta(days=1)
+    while not trading_calendar.is_trading_day(nxt):
+        nxt += dt.timedelta(days=1)
+    out = dict(
+        rule=strategy.RULE_VERSION,
+        top_n=strategy.TOP_N,
+        lookback=strategy.LOOKBACK,
+        skip=strategy.SKIP,
+        cost=strategy.COST,
+        rebalance_date=reb,
+        trade_date=nxt.isoformat(),
+        holding_from='next' if is_end else 'this',
+        picks=current,
+        previous_date=prev[-1] if prev else None,
+        buy=[c for c in cur if c not in previous],
+        sell=[c for c in previous if c not in cur],
+        hold=[c for c in cur if c in previous],
+        provisional=None
+        if is_end
+        else [entry(*x) for x in strategy.ranking(panel, ASSET_CLASS, latest, sig)[: strategy.TOP_N]],
+        track_start=strategy.TRACK_START,
+    )
+    out['added'], out['removed'] = out['buy'], out['sell']  # kept for older page scripts
+    fixed = {d: c for d, c in held.items() if d >= strategy.TRACK_START} or None
+    sim = strategy.simulate(panel, ASSET_CLASS, strategy.TRACK_START, sig=sig, fixed=fixed)
+    out['ledger'] = dict(
+        source='ledger' if fixed else 'recomputed',
+        weeks=len(fixed or {}),
+        late=[e['signal_date'] for e in (book or {}).get('entries', []) if e.get('recorded_after_trade')],
+        mismatches=ledger.mismatches(book, panel, ASSET_CLASS, sig=sig) if book is not None else [],
+        missing=sorted({c for _, c in sim['missing']}),
+    )
+    legacy = strategy.simulate(panel, ASSET_CLASS, strategy.TRACK_START, sig=nh)
+    if len(sim['returns']):
+        navs = pd.DataFrame(
+            {
+                's': (1 + sim['returns']).cumprod(),
+                'b': (1 + sim['benchmark']).cumprod(),
+                'e': (1 + sim['equal_weight']).cumprod(),
+                'l': (1 + legacy['returns']).cumprod().reindex(sim['returns'].index),
+            }
+        )
+        out['track'] = dict(
+            days=len(navs),
+            weeks=len(sim['holdings']),
+            execution='next_open',
+            strategy=strategy.stats(sim['returns']),
+            benchmark=strategy.stats(sim['benchmark']),
+            equal_weight=strategy.stats(sim['equal_weight']),
+            legacy=dict(rule=strategy.LEGACY_RULE, **strategy.stats(legacy['returns'])),
+            nav=[dict(date=d, s=round(r.s, 5), b=round(r.b, 5), e=round(r.e, 5)) for d, r in navs.iterrows()],
+            holdings=[dict(date=d, picks=c) for d, c in sim['holdings'][-12:]],
+        )
+    else:
+        out['track'] = None
     return out
 
+
 def metrics(entries):
-    rows,latest,_=analyze(entries)
-    return rows,latest
+    rows, latest, _ = analyze(entries)
+    return rows, latest
+
 
 def snapshot_baseline(payload):
     return {key: payload.get(key) for key in ('asof', 'model', 'provider', 'benchmark', 'universe_version')} | {
-        'rows': [{key: row.get(key) for key in ('ticker', 'score', 'setup', 'eligible', 'cached')}
-                 for row in payload.get('rows', [])]}
+        'rows': [
+            {key: row.get(key) for key in ('ticker', 'score', 'setup', 'eligible', 'cached')}
+            for row in payload.get('rows', [])
+        ]
+    }
 
 
 def attach_comparison(payload, previous):
     """Compare published observations; never reconstruct past adjusted prices."""
     payload['comparison'] = None
-    baseline = previous if previous and previous.get('asof', '') < payload['asof'] else (
-        previous.get('previous_snapshot') if previous and previous.get('asof') == payload['asof'] else None)
+    baseline = (
+        previous
+        if previous and previous.get('asof', '') < payload['asof']
+        else (previous.get('previous_snapshot') if previous and previous.get('asof') == payload['asof'] else None)
+    )
     payload['previous_snapshot'] = snapshot_baseline(baseline) if baseline else None
     if not baseline or not baseline.get('asof') or baseline['asof'] >= payload['asof']:
         return
@@ -264,118 +502,253 @@ def attach_comparison(payload, previous):
     scored = lambda r: r.get('eligible') and isinstance(r.get('score'), (int, float)) and math.isfinite(r['score'])
     old = {r['ticker']: r for r in baseline['rows'] if scored(r)}
     new = {r['ticker']: r for r in payload['rows'] if scored(r)}
-    if not old or old.keys() != new.keys() or any(r.get('cached') for r in [*old.values(), *new.values()]):
+    # Compare only ETFs scored from fresh data on both dates, ranked within that common set,
+    # so one missing or cached ETF no longer hides the whole comparison.
+    common = {t for t in old.keys() & new.keys() if not old[t].get('cached') and not new[t].get('cached')}
+    if not new or len(common) < math.ceil(len(new) * MIN_COVERAGE):
         return
+    excluded = sorted((old.keys() | new.keys()) - common)
+    old, new = {t: old[t] for t in common}, {t: new[t] for t in common}
+
     def ranks(rows):
         return {t: 1 + sum(r['score'] > row['score'] for r in rows.values()) for t, row in rows.items()}
+
     before, after = ranks(old), ranks(new)
     strong = {'Momentum', 'Strong / wait pullback'}
-    payload['comparison'] = {'asof': baseline['asof'], 'changes': {
-        t: {'rank_delta': before[t] - after[t],
-            'entered_strong': new[t]['setup'] in strong and old[t]['setup'] not in strong,
-            'broken': new[t]['setup'] == 'Avoid / broken' and old[t]['setup'] != 'Avoid / broken'}
-        for t in new}}
+    payload['comparison'] = {
+        'asof': baseline['asof'],
+        'changes': {
+            t: {
+                'rank_delta': before[t] - after[t],
+                'entered_strong': new[t]['setup'] in strong and old[t]['setup'] not in strong,
+                'broken': new[t]['setup'] == 'Avoid / broken' and old[t]['setup'] != 'Avoid / broken',
+            }
+            for t in new
+        },
+        'excluded': excluded,
+    }
 
 
-def published_snapshot():
+def published_urls():
+    env = os.environ.get('PUBLISHED_URLS', '').strip()
+    return [u.strip() for u in env.split(',') if u.strip()] if env else list(PUBLISHED_URLS)
+
+
+def published_snapshot(url):
     from html.parser import HTMLParser
+
     class DatasetParser(HTMLParser):
         active = False
         parts = None
+
         def handle_starttag(self, tag, attrs):
             if tag == 'script' and dict(attrs).get('id') == 'dataset':
                 self.active = True
                 self.parts = []
+
         def handle_endtag(self, tag):
-            if tag == 'script': self.active = False
+            if tag == 'script':
+                self.active = False
+
         def handle_data(self, data):
-            if self.active: self.parts.append(data)
+            if self.active:
+                self.parts.append(data)
+
     try:
-        with urllib.request.urlopen('https://kazenari99.github.io/a-etf-dashboard/', timeout=20) as response:
+        with urllib.request.urlopen(url, timeout=20) as response:
             page = response.read(5_000_000).decode('utf-8')
-        parser = DatasetParser(); parser.feed(page)
+        parser = DatasetParser()
+        parser.feed(page)
         return json.loads(''.join(parser.parts or []))
     except Exception as exc:
-        print(f'Previous published snapshot unavailable: {type(exc).__name__}; comparison omitted')
+        print(f'Previous published snapshot unavailable from {url}: {type(exc).__name__}')
         return None
 
 
 def local_snapshot():
     """Last published payload restored from the Actions cache (reports/etf_data.json)."""
-    try:return json.loads((ROOT/'reports/etf_data.json').read_text())
-    except Exception:return None
+    try:
+        return json.loads((ROOT / 'reports/etf_data.json').read_text())
+    except Exception:
+        return None
+
 
 def previous_snapshot():
-    """Newest of the cached and the live published payload; either source may be missing."""
-    snaps=[x for x in (local_snapshot(),published_snapshot()) if isinstance(x,dict) and x.get('asof')]
-    return max(snaps,key=lambda x:(x['asof'],x.get('generated',''))) if snaps else None
+    """Newest of the cached and the live published payloads; any source may be missing."""
+    snaps = [
+        x
+        for x in (local_snapshot(), *(published_snapshot(u) for u in published_urls()))
+        if isinstance(x, dict) and x.get('asof')
+    ]
+    return max(snaps, key=lambda x: (x['asof'], x.get('generated', ''))) if snaps else None
+
 
 def publish(payload):
-    out=ROOT/'reports';out.mkdir(exist_ok=True)
-    encoded=json.dumps(payload,ensure_ascii=False,allow_nan=False)
-    template=(ROOT/'dashboard.html').read_text()
-    for marker,file in (('__STYLE__','radar.css'),('__SCRIPT__','radar.js')):template=template.replace(marker,(ROOT/file).read_text())
-    page=template.replace('__DATA__',encoded.replace('<','\\u003c'))
-    (ROOT/'index.html').write_text(page,encoding='utf-8')
-    (out/'etf_dashboard.html').write_text(page,encoding='utf-8')
-    (out/'etf_data.json').write_text(encoded,encoding='utf-8')
+    out = ROOT / 'reports'
+    out.mkdir(exist_ok=True)
+    encoded = json.dumps(payload, ensure_ascii=False, allow_nan=False)
+    template = (ROOT / 'dashboard.html').read_text()
+    for marker, file in (('__STYLE__', 'radar.css'), ('__SCRIPT__', 'radar.js')):
+        template = template.replace(marker, (ROOT / file).read_text())
+    page = template.replace('__DATA__', encoded.replace('<', '\\u003c'))
+    (ROOT / 'index.html').write_text(page, encoding='utf-8')
+    (out / 'etf_dashboard.html').write_text(page, encoding='utf-8')
+    (out / 'etf_data.json').write_text(encoded, encoding='utf-8')
     return out
 
-def check_coverage(rows):
-    eligible=sum(r['eligible'] for r in rows)
-    if not eligible:raise RuntimeError('无日期对齐且满121根的同花顺数据，保留已发布页面。')
-    if eligible<math.ceil(len(rows)*MIN_COVERAGE):
-        raise RuntimeError(f'有效样本 {eligible}/{len(rows)} 低于 {MIN_COVERAGE:.0%}，百分位评分口径不可比，保留已发布页面。')
 
-def build(offline=False,render=False):
-    cache=json.loads(CACHE.read_text()) if CACHE.exists() else {}
+def backtest_summary(path=None):
+    """Weekly-rule backtest figures for the page, read from reports/backtest.json so the page,
+    README (checked by tests/test_docs.py) and report quote one source."""
+    try:
+        rule = json.loads(Path(path or ROOT / 'reports/backtest.json').read_text()).get('rule') or {}
+    except (OSError, ValueError):
+        return None
+    if rule.get('rule') != strategy.RULE_VERSION or not rule.get('strategy'):
+        return None
+    rob = rule.get('robustness') or {}
+    pick = lambda d, *ks: {k: d.get(k) for k in ks} if d else None
+    return dict(
+        start=rule['start'],
+        end=rule['end'],
+        cost=rule['cost'],
+        turnover=rule.get('turnover'),
+        cagr=rule['strategy']['cagr'],
+        mdd=rule['strategy']['mdd'],
+        bench_cagr=rule['benchmark']['cagr'],
+        ew_cagr=rule['equal_weight']['cagr'],
+        grid_range=rob.get('grid_range'),
+        costs=rob.get('costs'),
+        subsample=pick(rob.get('subsample'), 'cagr_p5', 'cagr_median', 'cagr_p95'),
+        deflated=pick(rob.get('deflated'), 'psr', 'dsr', 'trials'),
+    )
+
+
+def calendar_payload():
+    """Closures for the page's own staleness check (the page may be viewed long after it was built)."""
+    return dict(
+        holidays=sorted(d.isoformat() for d in trading_calendar.HOLIDAYS),
+        known=sorted(trading_calendar._CLOSED),
+        update_after='21:00',
+    )
+
+
+def check_coverage(rows):
+    eligible = sum(r['eligible'] for r in rows)
+    if not eligible:
+        raise RuntimeError('无日期对齐且满121根的同花顺数据，保留已发布页面。')
+    if eligible < math.ceil(len(rows) * MIN_COVERAGE):
+        raise RuntimeError(
+            f'有效样本 {eligible}/{len(rows)} 低于 {MIN_COVERAGE:.0%}，百分位评分口径不可比，保留已发布页面。'
+        )
+
+
+def build(offline=False, render=False):
+    cache = json.loads(CACHE.read_text()) if CACHE.exists() else {}
     if render:
-        missing=[c for items in ETF_GROUPS.values() for c,_ in items if not cache.get(c,{}).get('rows')]
-        if missing:raise RuntimeError(f'缓存缺少 {len(missing)} 只观察池ETF，无法离线重绘，请联网运行。')
-        if len(cache.get(BENCHMARK,{}).get('rows',[]))<strategy.LOOKBACK+10:raise RuntimeError('缓存历史不足250个交易日，无法计算周度清单，请联网运行。')
-        payload=json.loads((ROOT/'reports/etf_data.json').read_text())
-        previous=dict(payload)
-        payload['rows'],payload['asof'],payload['regime'],payload['weekly']=analyze_full(cache)
+        missing = [c for items in ETF_GROUPS.values() for c, _ in items if not cache.get(c, {}).get('rows')]
+        if missing:
+            raise RuntimeError(f'缓存缺少 {len(missing)} 只观察池ETF，无法离线重绘，请联网运行。')
+        if len(cache.get(BENCHMARK, {}).get('rows', [])) < strategy.LOOKBACK + 10:
+            raise RuntimeError('缓存历史不足250个交易日，无法计算周度清单，请联网运行。')
+        payload = json.loads((ROOT / 'reports/etf_data.json').read_text())
+        previous = dict(payload)
+        book = ledger.load()
+        payload['rows'], payload['asof'], payload['regime'], payload['weekly'] = analyze_full(cache, book)
         check_coverage(payload['rows'])
-        payload['universe_version']=UNIVERSE_VERSION
-        attach_comparison(payload,previous)
-        publish(payload);return
-    entries={};errors=[];key=None if offline else api_key()
-    tasks=[c for items in ETF_GROUPS.values() for c,_ in items]+[CASH_ETF[0]]
-    for i,code in enumerate(tasks,1):
-        old=cache.get(code,{})
-        entry=dict(old,cached=True) if old.get('rows') else dict(rows=[],source='同花顺金融API',cached=False)
+        payload['universe_version'] = UNIVERSE_VERSION
+        payload['calendar'] = calendar_payload()
+        payload['backtest'] = backtest_summary()
+        attach_comparison(payload, previous)
+        publish(payload)
+        ledger.save(book)
+        return
+    entries = {}
+    errors = []
+    key = None if offline else api_key()
+    tasks = [c for items in ETF_GROUPS.values() for c, _ in items] + [CASH_ETF[0]]
+    for i, code in enumerate(tasks, 1):
+        old = cache.get(code, {})
+        entry = dict(old, cached=True) if old.get('rows') else dict(rows=[], source='同花顺金融API', cached=False)
         if not offline:
             try:
-                fresh=request_history(code,key)
-                if not old.get('rows') or fresh['rows'][-1]['date']>=old['rows'][-1]['date']:entry=fresh
-                else:errors.append(f'{code}：上游日期落后于缓存，保留较新批次。')
-            except AuthError:raise
+                fresh = request_history(code, key)
+                if not old.get('rows') or fresh['rows'][-1]['date'] >= old['rows'][-1]['date']:
+                    entry = fresh
+                else:
+                    errors.append(f'{code}：上游日期落后于缓存，保留较新批次。')
+            except AuthError:
+                raise
             except APIError as exc:
-                if exc.code in AUTH_API_CODES:raise
+                if exc.code in AUTH_API_CODES:
+                    raise
                 errors.append(f'{code}：{exc}')
-            except Exception as exc:errors.append(f'{code}：{type(exc).__name__}: {exc}')
-            time.sleep(.4)
-        entries[code]=entry
-        print(f'同花顺 {i}/{len(tasks)} {code} {len(entry["rows"])} bars',flush=True)
+            except Exception as exc:
+                errors.append(f'{code}：{type(exc).__name__}: {exc}')
+            time.sleep(0.4)
+        entries[code] = entry
+        print(f'同花顺 {i}/{len(tasks)} {code} {len(entry["rows"])} bars', flush=True)
     if not offline:
         for code in CROSS_BORDER:
-            try:entries[code]['nav']=request_nav(code,key)
-            except AuthError:raise
-            except Exception as exc:errors.append(f'{code} 净值：{type(exc).__name__}: {exc}；溢价不显示。')
-            time.sleep(.4)
-    rows,latest,regime,weekly=analyze_full(entries)
+            try:
+                entries[code]['nav'] = request_nav(code, key)
+            except AuthError:
+                raise
+            except Exception as exc:
+                errors.append(f'{code} 净值：{type(exc).__name__}: {exc}；溢价不显示。')
+            time.sleep(0.4)
+    book = ledger.load()
+    rows, latest, regime, weekly = analyze_full(entries, book)
     check_coverage(rows)
-    now=dt.datetime.now(TZ)
-    if not trading_calendar.known(now.year):errors.append(f'trading_calendar.py 未收录{now.year}年休市安排，仅按工作日判断截止日；交易所公布后请补充。')
-    payload=dict(rows=rows,asof=latest,generated=now.isoformat(timespec='seconds'),errors=errors,offline=offline,provider='同花顺金融API',benchmark='510300',model=model.PROD.name,regime=regime,weekly=weekly,universe_version=UNIVERSE_VERSION,requested_cutoff=completed_cutoff(now).isoformat())
+    now = dt.datetime.now(TZ)
+    for year in trading_calendar.missing_years(now.date()):
+        errors.append(
+            f'trading_calendar.py 未收录{year}年休市安排，该年仅按工作日判断截止日和调仓日；国务院/交易所公布后请补充。'
+        )
+    payload = dict(
+        rows=rows,
+        asof=latest,
+        generated=now.isoformat(timespec='seconds'),
+        errors=errors,
+        offline=offline,
+        provider='同花顺金融API',
+        benchmark='510300',
+        model=model.PROD.name,
+        regime=regime,
+        weekly=weekly,
+        universe_version=UNIVERSE_VERSION,
+        requested_cutoff=completed_cutoff(now).isoformat(),
+        calendar=calendar_payload(),
+        backtest=backtest_summary(),
+    )
     attach_comparison(payload, previous_snapshot() if not offline else None)
-    out=publish(payload)
+    out = publish(payload)
     if not offline:
-        CACHE.parent.mkdir(exist_ok=True);tmp=CACHE.with_suffix('.tmp');tmp.write_text(json.dumps(entries,ensure_ascii=False));tmp.replace(CACHE)
-        archive=ROOT/'archive'/now.strftime('%Y-%m-%d')/now.strftime('%H%M%S');archive.mkdir(parents=True,exist_ok=True)
-        for name in ('etf_dashboard.html','etf_data.json'):(archive/name).write_bytes((out/name).read_bytes())
-    print(json.dumps(dict(asof=latest,total=len(rows),eligible=sum(r['eligible'] for r in rows),cached=sum(r['cached'] for r in rows),errors=len(errors))))
+        ledger.save(book)
+        CACHE.parent.mkdir(exist_ok=True)
+        tmp = CACHE.with_suffix('.tmp')
+        tmp.write_text(json.dumps(entries, ensure_ascii=False))
+        tmp.replace(CACHE)
+        archive = ROOT / 'archive' / now.strftime('%Y-%m-%d') / now.strftime('%H%M%S')
+        archive.mkdir(parents=True, exist_ok=True)
+        for name in ('etf_dashboard.html', 'etf_data.json'):
+            (archive / name).write_bytes((out / name).read_bytes())
+    print(
+        json.dumps(
+            dict(
+                asof=latest,
+                total=len(rows),
+                eligible=sum(r['eligible'] for r in rows),
+                cached=sum(r['cached'] for r in rows),
+                errors=len(errors),
+            )
+        )
+    )
 
-if __name__=='__main__':
-    parser=argparse.ArgumentParser();parser.add_argument('--offline',action='store_true');parser.add_argument('--render',action='store_true');args=parser.parse_args();build(args.offline,args.render)
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--offline', action='store_true')
+    parser.add_argument('--render', action='store_true')
+    args = parser.parse_args()
+    build(args.offline, args.render)

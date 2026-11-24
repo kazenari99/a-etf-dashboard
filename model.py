@@ -10,10 +10,11 @@ overheat penalty (2021-2026 backtest: names > 2.5 ATR above EMA20 kept outperfor
 with hysteresis on the strong label (halves label churn, score unchanged). V2 bundles the
 other candidates; it did not beat V1 and is kept only as a backtest row.
 """
+
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
 import math
+from dataclasses import dataclass, replace
 
 import numpy as np
 import pandas as pd
@@ -25,28 +26,37 @@ STRONG = ('Momentum', 'Strong / wait pullback')
 @dataclass(frozen=True)
 class ModelConfig:
     name: str = 'us-momentum-v1'
-    weights: tuple = ((20, .30), (60, .40), (120, .30))
-    skip_recent: int = 0        # drop the last k sessions from the 20-day horizon (A-share short-term reversal)
-    risk_adjust: bool = False   # rank return / volatility of the same horizon instead of raw return
-    overheat: str = 'step'      # 'step': -penalty beyond overheat_atr; 'linear': ramps over overheat_ramp
+    weights: tuple = ((20, 0.30), (60, 0.40), (120, 0.30))
+    skip_recent: int = 0  # drop the last k sessions from the 20-day horizon (A-share short-term reversal)
+    risk_adjust: bool = False  # rank return / volatility of the same horizon instead of raw return
+    overheat: str = 'step'  # 'step': -penalty beyond overheat_atr; 'linear': ramps over overheat_ramp
     overheat_atr: float = 2.5
     overheat_ramp: tuple = (1.5, 3.5)
     overheat_penalty: float = 8.0
     trend_bonus: float = 5.0
-    rs_bonus: float = 3.0       # bonus for beating the benchmark over 60 days (a threshold, not a ranking)
-    rank_scope: str = 'all'     # 'all' or 'equity' (commodities/bonds handled by absolute momentum)
-    dedupe: bool = False        # one representative per exposure cluster sets the percentile scale
-    min_adtv: float = 0.0       # yuan; below this an ETF is not ranked
-    smooth: int = 1             # average score over the last n sessions
-    hysteresis: bool = False    # once strong, stay strong until the looser pullback conditions fail
+    rs_bonus: float = 3.0  # bonus for beating the benchmark over 60 days (a threshold, not a ranking)
+    rank_scope: str = 'all'  # 'all' or 'equity' (commodities/bonds handled by absolute momentum)
+    dedupe: bool = False  # one representative per exposure cluster sets the percentile scale
+    min_adtv: float = 0.0  # yuan; below this an ETF is not ranked
+    smooth: int = 1  # average score over the last n sessions
+    hysteresis: bool = False  # once strong, stay strong until the looser pullback conditions fail
 
     def variant(self, name, **changes):
         return replace(self, name=name, **changes)
 
 
 V1 = ModelConfig()
-V2 = V1.variant('a-momentum-v2-candidate', skip_recent=5, risk_adjust=True, overheat='linear',
-                rank_scope='equity', dedupe=True, min_adtv=2e7, smooth=3, hysteresis=True)
+V2 = V1.variant(
+    'a-momentum-v2-candidate',
+    skip_recent=5,
+    risk_adjust=True,
+    overheat='linear',
+    rank_scope='equity',
+    dedupe=True,
+    min_adtv=2e7,
+    smooth=3,
+    hysteresis=True,
+)
 # v1.2: percentiles are computed among equity ETFs only; bonds, commodities and convertibles
 # get no relative score (the page shows their absolute momentum instead).
 PROD = V1.variant('a-momentum-v1.2', overheat_penalty=0.0, hysteresis=True, rank_scope='equity')
@@ -173,8 +183,11 @@ def _setups(panel, rs60, hysteresis):
             held[i] = s[i] | (w[i] & held[i - 1]) if i else s[i]
         strong = pd.DataFrame(held, index=strong.index, columns=strong.columns)
         watch = watch & ~strong
-    labels = np.where(strong, np.where(dist <= 2.5, 'Momentum', 'Strong / wait pullback'),
-                      np.where(watch, 'Pullback watch', 'Avoid / broken'))
+    labels = np.where(
+        strong,
+        np.where(dist <= 2.5, 'Momentum', 'Strong / wait pullback'),
+        np.where(watch, 'Pullback watch', 'Avoid / broken'),
+    )
     out = pd.DataFrame(labels, index=close.index, columns=close.columns)
     return out.where(panel['eligible'], 'Data unavailable')
 
@@ -236,16 +249,22 @@ def regime(panel, asset_class, cash_rate=CASH_RATE, market=None, cash=None):
     """
     bench = panel['benchmark']
     hurdle = cash_hurdle(panel, cash, cash_rate)
-    equity = [t for t in panel['eligible'].columns if asset_class.get(t, 'equity') == 'equity'
-              and (market is None or market.get(t, '境内') == '境内')]
+    equity = [
+        t
+        for t in panel['eligible'].columns
+        if asset_class.get(t, 'equity') == 'equity' and (market is None or market.get(t, '境内') == '境内')
+    ]
     elig = panel['eligible'][equity]
     breadth = (panel['r60'][equity] > 0).where(elig).sum(axis=1) / elig.sum(axis=1).replace(0, np.nan)
     above = panel['close'][bench] > panel['sma120'][bench]
     beats = panel['r120'][bench] > hurdle
-    state = np.where(beats & above & (breadth >= .5), 'risk_on',
-                     np.where(~beats & ~above & (breadth < .4), 'risk_off', 'neutral'))
-    return pd.DataFrame({'state': state, 'breadth60': breadth, 'bench_r120': panel['r120'][bench],
-                         'hurdle': hurdle}, index=panel['eligible'].index)
+    state = np.where(
+        beats & above & (breadth >= 0.5), 'risk_on', np.where(~beats & ~above & (breadth < 0.4), 'risk_off', 'neutral')
+    )
+    return pd.DataFrame(
+        {'state': state, 'breadth60': breadth, 'bench_r120': panel['r120'][bench], 'hurdle': hurdle},
+        index=panel['eligible'].index,
+    )
 
 
 def absolute_momentum(panel, cash_rate=CASH_RATE, cash=None):

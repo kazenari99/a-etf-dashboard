@@ -7,8 +7,6 @@ on:
     - cron: "0 11 * * 1-5"
 permissions:
   contents: read
-  pages: write
-  id-token: write
 concurrency:
   group: pages
   cancel-in-progress: false
@@ -16,13 +14,28 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 35
+    permissions:
+      contents: write   # commit track/ledger.json (append-only weekly picks)
+      pages: write
+    outputs:
+      calendar_missing: ${{ steps.calendar.outputs.missing }}
+      ledger_push: ${{ steps.ledger.outputs.push }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: pip
       - run: pip install -r requirements.txt
+      # Runs before anything can fail, so the notify job always knows about a missing year.
+      - name: Check trading calendar
+        id: calendar
+        run: |
+          missing=$(python -c "import datetime as d,trading_calendar as t;n=d.datetime.now(d.timezone(d.timedelta(hours=8))).date();print(' '.join(map(str,t.missing_years(n))))")
+          echo "missing=$missing" >> "$GITHUB_OUTPUT"
+          if [ -n "$missing" ]; then echo "::warning::trading_calendar.py is missing year(s): $missing"; fi
       - name: Test data integrity rules
         run: python -m unittest discover -s tests -v
       - uses: actions/cache@v4
@@ -46,7 +59,24 @@ jobs:
           else
             python radar.py
           fi
-      - name: Archive research run
+      # The ledger is the paper track's source of truth; keep it in git so history is auditable.
+      # Commits made with GITHUB_TOKEN do not trigger another workflow run.
+      - name: Commit paper-track ledger
+        id: ledger
+        if: github.ref == 'refs/heads/main'
+        run: |
+          if [ -z "$(git status --porcelain -- track/ledger.json)" ]; then echo "push=unchanged" >> "$GITHUB_OUTPUT"; exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add track/ledger.json
+          git commit -m "Record weekly picks ledger ($(date -u +%F))"
+          for i in 1 2 3; do
+            if git pull --rebase origin main && git push origin HEAD:main; then echo "push=ok" >> "$GITHUB_OUTPUT"; exit 0; fi
+            sleep $((i * 10))
+          done
+          echo "push=failed" >> "$GITHUB_OUTPUT"
+          echo "::warning::Could not push track/ledger.json; the next run will try again"
+
         uses: actions/upload-artifact@v4
         with:
           name: etf-research-${{ github.run_id }}
@@ -62,6 +92,9 @@ jobs:
         with:
           path: public
   deploy:
+    permissions:
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -71,3 +104,41 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
+  # Scheduled/manual runs: open (or update) an issue when publishing fails, close it on the
+  # next success; also flag a missing trading-calendar year and a ledger that could not be pushed.
+  notify:
+    needs: [build, deploy]
+    if: ${{ always() && github.event_name != 'push' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      BUILD: ${{ needs.build.result }}
+      DEPLOY: ${{ needs.deploy.result }}
+      CALENDAR_MISSING: ${{ needs.build.outputs.calendar_missing }}
+      LEDGER_PUSH: ${{ needs.build.outputs.ledger_push }}
+    steps:
+      - name: Report pipeline health
+        run: |
+          find_issue() { gh issue list --state open --limit 50 --json number,title --jq ".[] | select(.title == \"$1\") | .number" | head -1; }
+          report() {  # title body
+            n=$(find_issue "$1")
+            if [ -n "$n" ]; then gh issue comment "$n" --body "$2"; else gh issue create --title "$1" --body "$2"; fi
+          }
+          FAIL_TITLE="[自动更新失败] ETF 看板每日发布"
+          if [ "$BUILD" = "success" ] && [ "$DEPLOY" = "success" ]; then
+            n=$(find_issue "$FAIL_TITLE")
+            if [ -n "$n" ]; then gh issue close "$n" --comment "已恢复：$RUN_URL"; fi
+          else
+            report "$FAIL_TITLE" "发布失败（build=$BUILD, deploy=$DEPLOY），线上保留上一版页面。运行记录：$RUN_URL"
+          fi
+          if [ -n "$CALENDAR_MISSING" ]; then
+            report "[交易日历] 缺少 $CALENDAR_MISSING 年休市安排" "trading_calendar.py 未收录 $CALENDAR_MISSING 年。缺失年份只按工作日判断截止日与调仓日，节假日附近的周度清单会算错。按国务院节假日通知与上交所休市通知补充。$RUN_URL"
+          fi
+          if [ "$LEDGER_PUSH" = "failed" ]; then
+            report "[纸面跟踪] track/ledger.json 未能提交" "本次新增的周度清单记录未能推送到 main（可能是分支保护）。下次运行会重试；如持续失败，请允许 github-actions[bot] 推送或改用其他存储。$RUN_URL"
+          fi

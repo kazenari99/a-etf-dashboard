@@ -1,9 +1,11 @@
 import json
-from pathlib import Path
 import unittest
+from pathlib import Path
 from unittest.mock import patch
+
 import numpy as np
 import pandas as pd
+
 import model
 import radar
 import strategy
@@ -14,12 +16,16 @@ FIXTURE = json.loads((Path(__file__).parent / 'fixtures/us_model_parity.json').r
 def synthetic_panel(days=320):
     """Five equity ETFs with distinct trends + the benchmark, all liquid and aligned."""
     dates = pd.bdate_range('2025-01-02', periods=days).strftime('%Y-%m-%d')
-    drift = {'510300': 0.0, '510050': .002, '510500': .001, '512100': -.001, '159915': .0015, '512800': .0005}
+    drift = {'510300': 0.0, '510050': 0.002, '510500': 0.001, '512100': -0.001, '159915': 0.0015, '512800': 0.0005}
     entries = {}
     for code, d in drift.items():
         c = 1.0 * np.exp(np.cumsum(np.full(days, d) + 0.004 * np.sin(np.arange(days) / 7 + len(code))))
-        entries[code] = dict(rows=[dict(date=x, open=v, high=v * 1.01, low=v * .99, close=v, volume=1, turnover=1e8)
-                                   for x, v in zip(dates, c)])
+        entries[code] = dict(
+            rows=[
+                dict(date=x, open=v, high=v * 1.01, low=v * 0.99, close=v, volume=1, turnover=1e8)
+                for x, v in zip(dates, c, strict=True)
+            ]
+        )
     return entries, model.build_panel(entries, '510300')
 
 
@@ -46,14 +52,15 @@ class StrategyTests(unittest.TestCase):
         last = p['close'].index[-1]
         picks = strategy.picks(p, {'510050': 'bond'}, last, n=10)
         self.assertNotIn('510050', picks)
-        p['adtv20'] = p['adtv20'].copy(); p['adtv20']['510500'] = 1e6
+        p['adtv20'] = p['adtv20'].copy()
+        p['adtv20']['510500'] = 1e6
         self.assertNotIn('510500', strategy.picks(p, {}, last, n=10))
 
     def test_simulation_charges_costs_and_is_causal(self):
         entries, p = synthetic_panel()
         start = p['close'].index[260]
         free = strategy.simulate(p, {}, start, cost=0)
-        paid = strategy.simulate(p, {}, start, cost=.001)
+        paid = strategy.simulate(p, {}, start, cost=0.001)
         self.assertGreater(free['returns'].sum(), paid['returns'].sum())
         self.assertGreater(paid['turnover'], 0)
         # Changing prices after a date must not change returns up to that date.
@@ -95,7 +102,7 @@ class StrategyTests(unittest.TestCase):
         dates = list(p['close'].index)
         cut = dates[-30]
         ok = strategy.candidates(p, {}, added={'510050': cut})
-        self.assertFalse(ok['510050'].loc[:dates[-31]].any())
+        self.assertFalse(ok['510050'].loc[: dates[-31]].any())
         self.assertTrue(ok['510050'].loc[cut:].equals(strategy.candidates(p, {}, added={})['510050'].loc[cut:]))
 
     def test_cash_hurdle_and_domestic_breadth(self):
@@ -119,7 +126,13 @@ class StrategyTests(unittest.TestCase):
         if by.get('512800', {}).get('eligible'):
             self.assertIsNone(by['512800']['score'])
             self.assertIn(by['512800']['setup'], ('Absolute up', 'Absolute down'))
-        self.assertTrue(all(isinstance(r['score'], float) for r in rows if r['eligible'] and classes.get(r['ticker'], 'equity') == 'equity'))
+        self.assertTrue(
+            all(
+                isinstance(r['score'], float)
+                for r in rows
+                if r['eligible'] and classes.get(r['ticker'], 'equity') == 'equity'
+            )
+        )
 
     def test_v2_signal_skips_recent_sessions(self):
         entries, p = synthetic_panel()
@@ -135,9 +148,9 @@ class StrategyTests(unittest.TestCase):
         i = cal.index(d)
         winner = strategy.picks(p, {}, d)[0]
         bumped = {k: dict(v, rows=[dict(r) for r in v['rows']]) for k, v in entries.items()}
-        for r in bumped[winner]['rows'][i + 1:]:
+        for r in bumped[winner]['rows'][i + 1 :]:
             for f in ('open', 'high', 'low', 'close'):
-                r[f] *= 1.10                         # +10% overnight jump right after the signal
+                r[f] *= 1.10  # +10% overnight jump right after the signal
         q = model.build_panel(bumped, '510300')
         base = strategy.simulate(p, {}, d, cost=0)['returns']
         jump = strategy.simulate(q, {}, d, cost=0)['returns']
