@@ -21,10 +21,10 @@ jobs:
       calendar_missing: ${{ steps.calendar.outputs.missing }}
       ledger_push: ${{ steps.ledger.outputs.push }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.11'
           cache: pip
@@ -38,7 +38,7 @@ jobs:
           if [ -n "$missing" ]; then echo "::warning::trading_calendar.py is missing year(s): $missing"; fi
       - name: Test data integrity rules
         run: python -m unittest discover -s tests -v
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         id: snapshot-cache
         with:
           path: |
@@ -77,7 +77,7 @@ jobs:
           echo "push=failed" >> "$GITHUB_OUTPUT"
           echo "::warning::Could not push track/ledger.json; the next run will try again"
       - name: Archive research run
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: etf-research-${{ github.run_id }}
           path: archive/
@@ -87,8 +87,8 @@ jobs:
         run: |
           mkdir -p public
           cp index.html public/
-      - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/configure-pages@v6
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: public
   deploy:
@@ -103,7 +103,7 @@ jobs:
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
   # Scheduled/manual runs: open (or update) an issue when publishing fails, close it on the
   # next success; also flag a missing trading-calendar year and a ledger that could not be pushed.
   notify:

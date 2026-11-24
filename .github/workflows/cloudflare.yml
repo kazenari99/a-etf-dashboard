@@ -32,10 +32,10 @@ jobs:
       CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID || 'd210ce0ca782b8901889a72737771d59' }}
       CLOUDFLARE_PROJECT: ${{ vars.CLOUDFLARE_PROJECT || 'jade-a' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: main
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.11'
       - name: Prepare validated snapshot and Cloudflare project
