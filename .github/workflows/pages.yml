@@ -52,9 +52,9 @@ jobs:
         env:
           HITHINK_API_KEY: ${{ secrets.HITHINK_API_KEY }}
           EVENT_NAME: ${{ github.event_name }}
-          CACHE_MATCHED: ${{ steps.snapshot-cache.outputs.cache-matched-key }}
         run: |
-          if [ "$EVENT_NAME" = "push" ] && [ -n "$CACHE_MATCHED" ] && python radar.py --render; then
+          # actions/cache@v4 has no cache-matched-key output, so test for the restored files.
+          if [ "$EVENT_NAME" = "push" ] && [ -f data_cache/hithink_klines.json ] && [ -f reports/etf_data.json ] && python radar.py --render; then
             echo "Re-rendered cached snapshot without calling the API"
           else
             python radar.py

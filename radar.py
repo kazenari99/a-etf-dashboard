@@ -50,6 +50,7 @@ INDEX_ETFS = [
 MIN_COVERAGE = 0.9
 # Published copies read back for the daily comparison; PUBLISHED_URLS (comma-separated) overrides.
 PUBLISHED_URLS = ('https://jade-a.pages.dev/', 'https://kazenari99.github.io/a-etf-dashboard/')
+USER_AGENT = 'ETF-Momentum-Radar/1.0'
 AUTH_API_CODES = (2001, 2003)
 
 
@@ -89,7 +90,7 @@ def api_get(path, params, key, attempts=4):
     """GET with bounded exponential backoff + jitter; auth failures abort immediately."""
     req = urllib.request.Request(
         BASE + path + '?' + urllib.parse.urlencode(params),
-        headers={'X-api-key': key, 'User-Agent': 'ETF-Momentum-Radar/1.0'},
+        headers={'X-api-key': key, 'User-Agent': USER_AGENT},
     )
     for attempt in range(attempts):
         last = attempt == attempts - 1
@@ -555,13 +556,16 @@ def published_snapshot(url):
                 self.parts.append(data)
 
     try:
-        with urllib.request.urlopen(url, timeout=20) as response:
+        # Cloudflare rejects urllib's default User-Agent; identify the client like api_get does.
+        request = urllib.request.Request(url, headers={'User-Agent': USER_AGENT})
+        with urllib.request.urlopen(request, timeout=20) as response:
             page = response.read(5_000_000).decode('utf-8')
         parser = DatasetParser()
         parser.feed(page)
         return json.loads(''.join(parser.parts or []))
     except Exception as exc:
-        print(f'Previous published snapshot unavailable from {url}: {type(exc).__name__}')
+        detail = f' {exc.code}' if isinstance(exc, urllib.error.HTTPError) else ''
+        print(f'Previous published snapshot unavailable from {url}: {type(exc).__name__}{detail}')
         return None
 
 

@@ -225,6 +225,24 @@ class RadarTests(unittest.TestCase):
         ):
             self.assertEqual(radar.previous_snapshot()['asof'], '2026-11-20')
 
+    def test_published_snapshot_sends_user_agent(self):
+        page = '<script id="dataset" type="application/json">{"asof": "2026-11-20"}</script>'
+
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def read(self, n):
+                return page.encode()
+
+        with patch.object(radar.urllib.request, 'urlopen', return_value=Response()) as urlopen:
+            self.assertEqual(radar.published_snapshot('https://example.test/')['asof'], '2026-11-20')
+        request = urlopen.call_args[0][0]
+        self.assertEqual(request.get_header('User-agent'), radar.USER_AGENT)
+
 
 if __name__ == '__main__':
     unittest.main()

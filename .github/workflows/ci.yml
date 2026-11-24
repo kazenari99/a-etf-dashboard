@@ -31,7 +31,7 @@ jobs:
       - name: Lint workflows (actionlint)
         run: |
           bash <(curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/v1.7.7/scripts/download-actionlint.bash) 1.7.7
-          ./actionlint -color -ignore 'property "cache-matched-key" is not defined'
+          ./actionlint -color
       - name: Unit tests
         run: python -m unittest discover -s tests -v
       - name: Page script syntax
